@@ -20,8 +20,15 @@ def test_websocket_room_gameplay_flow():
          patch("app.api.websocket.room.redis_client", new_callable=AsyncMock) as mock_redis, \
          patch.object(room_manager, "broadcast", new_callable=AsyncMock) as mock_broadcast:
         
-        # Setup mock game configurations and return values
-        mock_redis.get.return_value = "4"  # Simulated 4 pieces room config
+        # Setup mock game configurations and return values.
+        # The Redis mock must be key-aware: the endpoint reads several distinct
+        # keys and json.loads() each value, so a single blanket return value
+        # (e.g. "4") makes json.loads produce an int and breaks the handler.
+        room_settings = {
+            "room:test-room:pieces_count": "4",
+            "room:test-room:player_count": "2",
+        }
+        mock_redis.get.side_effect = lambda key: room_settings.get(key)
         
         mock_game_service.get_game.return_value = None  # First player joins triggers initialization
         mock_game_service.create_game.return_value = {
