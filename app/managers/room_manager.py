@@ -69,6 +69,16 @@ class RoomManager:
                     # Silently handle disconnected sockets during broadcast
                     pass
 
+    def cancel_disconnect_timers(self, room_id: str) -> None:
+        """
+        Cancels every pending forfeit timer of a room.
+
+        A rematch starts a fresh match, so a timer armed during the previous one
+        must not knock a player out of the new game.
+        """
+        for player_id in list(self.disconnect_tasks.get(room_id, {})):
+            self._cancel_disconnect_task(room_id, player_id)
+
     def _cancel_disconnect_task(self, room_id: str, player_id: str) -> None:
         """
         Cancels and cleans up an active forfeit task.

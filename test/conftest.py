@@ -5,7 +5,13 @@ The services talk to Redis directly, so every test patches the module-level
 must never require (or mutate) a running Redis instance.
 """
 
+import asyncio
+import json
+import time
+
 import pytest
+
+from app.services import room_service as RoomService
 
 
 class FakeRedis:
@@ -61,12 +67,24 @@ class FakeRedis:
     async def expire(self, key: str, seconds: int) -> bool:
         return True
 
-    async def blpop(self, keys, timeout: int = 0):
-        for key in keys:
-            items = self.lists.get(key, [])
-            if items:
-                return key, items.pop(0)
-        return None
+    async def blpop(self, keys, timeout: float = 0):
+        """Block until an item shows up or the timeout expires.
+
+        Real Redis blocks for ``timeout`` seconds; polling keeps the fake usable
+        from concurrent coroutines in the same event loop. A zero timeout means
+        "do not wait" so a misconfigured test can never hang.
+        """
+        if isinstance(keys, str):
+            keys = [keys]
+        deadline = time.monotonic() + (timeout or 0)
+        while True:
+            for key in keys:
+                items = self.lists.get(key, [])
+                if items:
+                    return key, items.pop(0)
+            if not timeout or time.monotonic() >= deadline:
+                return None
+            await asyncio.sleep(0.01)
 
 
 #: Module-level ``redis_client`` bindings replaced by the fake in every test.
@@ -86,3 +104,38 @@ def fake_redis(monkeypatch):
     for target in REDIS_TARGETS:
         monkeypatch.setattr(target, fake)
     return fake
+
+
+@pytest.fixture
+def room_factory(fake_redis):
+    """Create a room with a complete roster and start its match."""
+
+    def _create(
+        room_id: str = "room-1",
+        player_count: int = 2,
+        pieces_count: int = 4,
+        coin_bet: int = 0,
+        player_ids: tuple[str, ...] | None = None,
+    ) -> dict:
+        ids = player_ids or tuple(f"p{index + 1}" for index in range(player_count))
+
+        async def _run() -> dict:
+            room = RoomService.new_room(
+                room_id,
+                player_count=player_count,
+                pieces_count=pieces_count,
+                coin_bet=coin_bet,
+            )
+            await RoomService.save_room(room_id, room)
+            for player_id in ids:
+                player = {"id": player_id, "name": f"Player {player_id}", "avatar": ""}
+                await fake_redis.set(f"player:{player_id}:meta", json.dumps(player))
+                room, _seat, error = await RoomService.register_player(room_id, player)
+                assert error is None, error
+            state = await RoomService.start_game(room_id, room)
+            assert state is not None, "a complete roster must start the match"
+            return state
+
+        return asyncio.run(_run())
+
+    return _create

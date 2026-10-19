@@ -15,29 +15,54 @@ router = APIRouter()
 
 async def forfeit_active_player(room_id: str, player_id: str) -> None:
     """
-    Callback function executed when a player remains disconnected for more than 60 seconds.
-    Sets the game status to finished and declares the remaining online opponent as the winner.
+    Callback executed when a player stays disconnected past the forfeit window.
+
+    A two-player match ends immediately with the remaining player as the winner.
+    With more players the disconnected one is eliminated and the match keeps
+    going, so a single dropped client can never hand the prize to an arbitrary
+    opponent. The winner is reported once per match by ``report_game_winner``.
     """
     state = await GameService.get_game(room_id)
-    if state and state["status"] == "playing":
-        state["status"] = "finished"
-        opponents = [p for p in state["players"] if p["id"] != player_id]
-        if opponents:
-            state["winner_id"] = opponents[0]["id"]
+    if not state or state.get("status") != "playing":
+        return
 
-        await GameService.save_game(room_id, state)
-        await room_manager.broadcast(room_id, {
-            "type": "sync_state",
-            "game": state
-        })
+    players = state.get("players") or []
+    if player_id not in {player["id"] for player in players}:
+        return
+
+    eliminated = list(state.get("eliminated_players") or [])
+    if player_id in eliminated:
+        return
+    eliminated.append(player_id)
+    state["eliminated_players"] = eliminated
+
+    remaining = [player for player in players if player["id"] not in eliminated]
+    if len(remaining) <= 1:
+        state["status"] = "finished"
+        state["winner_id"] = remaining[0]["id"] if remaining else None
+        state["dice"] = None
+        state["dice_rolled"] = False
+    elif state["players"][GameService._current_player_index(state)]["id"] == player_id:
+        # The seat that just dropped out was on turn: pass it along.
+        state = GameService._rotate_turn(state)
+
+    await GameService.save_game(room_id, state)
+    await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
+    await report_game_winner(room_id, state)
 
 
 async def report_game_winner(room_id: str, state: dict) -> None:
     """
     Report game winner to porteghal and update room status.
     Shared helper used by both WebSocket endpoints.
+
+    ``report_winner`` pays out the prize, so the first caller claims the match
+    and every later call (duplicate timer, reconnect) is a no-op.
     """
     if state.get("status") != "finished" or not state.get("winner_id"):
+        return
+    if not await RoomService.claim_winner_report(room_id):
+        logger.info("Winner of room %s was already reported", room_id)
         return
     try:
         meta_key = f"room:{room_id}:meta"
@@ -68,7 +93,7 @@ async def handle_gameplay_loop(
 ) -> None:
     """
     Shared gameplay message loop used by both WebSocket endpoints.
-    Handles roll_dice, move_piece, next_round, restart_game, chat, pass_turn.
+    Handles roll_dice, move_piece, next_round, restart_game, chat and pass_turn.
     """
     while True:
         data = await websocket.receive_text()
@@ -96,17 +121,12 @@ async def handle_gameplay_loop(
                 await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
                 await report_game_winner(room_id, state)
 
-            elif action == "next_round":
-                state = await GameService.get_game(room_id)
-                if state:
-                    state = await GameService.create_game(room_id, state["players"], state["pieces_count"], state["player_count"])
-                    await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
-
-            elif action == "restart_game":
-                state = await GameService.get_game(room_id)
-                if state:
-                    state = await GameService.create_game(room_id, state["players"], state["pieces_count"], state["player_count"])
-                    await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
+            elif action in ("next_round", "restart_game"):
+                # One rematch action: ``restart_game`` stays as a server-side
+                # alias so older clients keep working.
+                state = await RoomService.start_rematch(room_id, player_id)
+                room_manager.cancel_disconnect_timers(room_id)
+                await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
 
             elif action == "chat":
                 chat_text = message.get("message", "").strip()
@@ -120,11 +140,8 @@ async def handle_gameplay_loop(
                     })
 
             elif action == "pass_turn":
-                state = await GameService.get_game(room_id)
-                if state and state["status"] == "playing":
-                    state = GameService._rotate_turn(state)
-                    await GameService.save_game(room_id, state)
-                    await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
+                state = await GameService.pass_turn(room_id, player_id)
+                await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
 
         except json.JSONDecodeError:
             await websocket.send_json({"type": "error", "message": "Malformed JSON payload received"})
