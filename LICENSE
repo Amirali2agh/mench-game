@@ -1,0 +1,127 @@
+BINUX.TECH COMMERCIAL SOFTWARE LICENSE
+Version 1.0 — Effective 2026-10-19
+
+Copyright (c) 2026 AmirAli Ghasemi
+Copyright (c) 2026 binux.tech
+All rights reserved.
+
+This software is proprietary. It is NOT open source. Your rights to use it
+are limited to those expressly granted below.
+
+1. DEFINITIONS
+
+   "Licensor"      AmirAli Ghasemi, operating as binux.tech
+                   contact: licensing@binux.tech
+   "Licensee"      the individual or legal entity that paid for a License.
+   "Software"      the source code, build artifacts and documentation in this
+                   repository, excluding third-party components.
+   "Product"       any application, game, website or service in which the
+                   Software is incorporated, in whole or in part.
+   "Commercial Use" any use intended for or directed toward commercial
+                   advantage or monetary compensation, including offering the
+                   Product to third parties (paid or free), internal business
+                   use by a for-profit entity, or use within a paid service.
+
+2. LICENSE GRANT
+
+   Subject to full payment of the fees in Section 4 and continued compliance
+   with this License, the Licensor grants the Licensee a non-exclusive,
+   non-transferable, non-sublicensable, worldwide license to:
+
+   (a) use, copy, modify and compile the Software;
+   (b) incorporate the Software into Products;
+   (c) deploy and distribute such Products, for one (1) organization and its
+       employees.
+
+   The License is granted per organization. Affiliates and contractors of the
+   Licensee are covered; separate legal entities are not. One (1) License
+   covers an unlimited number of Products and deployments operated by the
+   Licensee.
+
+   The Software is published in a public repository for reference and
+   evaluation. Public availability does not itself grant any right to use the
+   Software commercially; such rights are granted only by this License or by a
+   separate written agreement with the Licensor.
+
+3. ATTRIBUTION (MANDATORY)
+
+   Every Product must display the credit
+
+       Powered by binux.tech        (linked to https://binux.tech)
+
+   in a place that is:
+
+   (a) visible to end users without opening a settings or about page —
+       for example the lobby, main menu, or footer of the Product; and
+   (b) legible and not obscured, hidden, or removed by CSS, overlay, or any
+       other means.
+
+   The credit must not be removed, hidden or replaced. The Licensee may not
+   state or imply that the Licensor endorses the Product without prior
+   written permission.
+
+4. FEES
+
+   (a) Initial license fee: USD 231.00, one-time, per License.
+   (b) Annual fee: USD 66.00 per year, per License, starting on the first
+       anniversary of purchase and renewing each year thereafter.
+   (c) The annual fee covers updates to new versions and email support.
+       Non-payment terminates the Licensee's right to receive and use
+       versions released after the lapse. Versions obtained while the
+       subscription was active may continue to be used, provided the Licensee
+       remains compliant with Sections 3, 5 and 6.
+   (d) Fees exclude taxes. The Licensee is responsible for applicable taxes
+       and for any transfer fees.
+
+5. RESTRICTIONS
+
+   The Licensee may NOT:
+
+   (a) redistribute, publish, sublicense, sell, rent, lease or otherwise make
+       the Software available to third parties as source code, or as part of a
+       product whose primary value is the Software itself;
+   (b) remove, alter or hide any copyright, license or attribution notice;
+   (c) use the Software to build a competing product offered to the same third
+       parties, without a separate written agreement with the Licensor;
+   (d) reverse engineer, decompile or disassemble the Software, except to the
+       extent such restriction is prohibited by applicable law;
+   (e) assign or transfer this License without the Licensor's prior written
+       consent.
+
+6. THIRD-PARTY COMPONENTS
+
+   Dependencies listed in the repository are governed by their own licenses
+   and are not covered by this License.
+
+7. TERM AND TERMINATION
+
+   This License is effective from the date of payment and continues until
+   terminated. It terminates automatically if the Licensee breaches any term
+   and fails to cure within thirty (30) days of written notice. On termination
+   the Licensee must stop using the Software and delete all copies, including
+   those incorporated into Products.
+
+8. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+   NON-INFRINGEMENT.
+
+9. LIMITATION OF LIABILITY
+
+   TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE LICENSOR'S TOTAL LIABILITY
+   UNDER THIS LICENSE WILL NOT EXCEED THE FEES PAID BY THE LICENSEE IN THE
+   TWELVE (12) MONTHS PRECEDING THE CLAIM. THE LICENSOR IS NOT LIABLE FOR
+   INDIRECT, INCIDENTAL, SPECIAL OR CONSEQUENTIAL DAMAGES.
+
+10. GOVERNING LAW
+
+    This License is governed by the laws of the Licensor's country of
+    residence as stated in the commercial agreement signed with the Licensee.
+    Absent such an agreement, disputes are subject to the exclusive
+    jurisdiction of the competent courts at the Licensor's place of business.
+
+11. CONTACT
+
+    Licensing:  licensing@binux.tech
+    Website:    https://binux.tech
