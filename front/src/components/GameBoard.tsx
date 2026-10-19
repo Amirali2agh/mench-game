@@ -353,10 +353,12 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   }, [gameState?.current_turn, gameState?.status, onPassTurn]);
 
   useEffect(() => {
-    if (gameState?.dice_rolled || gameState?.dice !== null) {
+    // Drive the latch from the roll flag only: a leftover dice value must never
+    // mark the next player's turn as already acted upon.
+    if (gameState?.dice_rolled) {
       hasActedRef.current = true;
     }
-  }, [gameState?.dice_rolled, gameState?.dice]);
+  }, [gameState?.dice_rolled]);
 
   const getColorForVisualIdx = (vIdx: number): string => {
     const map: Record<number, string> = {

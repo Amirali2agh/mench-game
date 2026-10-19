@@ -25,13 +25,9 @@ interface GameOverModalProps {
    */
   localPlayerId: string;
   /**
-   * Callback to request next round while keeping scores.
+   * Callback to start the next match with the same players and settings.
    */
   onNextRound: () => void;
-  /**
-   * Callback to hard-restart the entire game session.
-   */
-  onRestartGame: () => void;
   /**
    * Callback to exit the session and return to the registration lobby screen.
    */
@@ -44,7 +40,6 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
   players,
   localPlayerId,
   onNextRound,
-  onRestartGame,
   onLeave,
 }) => {
   // If the game status is not finished, do not render anything
@@ -118,22 +113,13 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
 
         {/* Action Button Grid */}
         <div className="flex flex-col gap-3">
-          {/* Next Round Button - Primary Action */}
+          {/* Rematch Button - Primary Action */}
           <button
             type="button"
             onClick={onNextRound}
             className="w-full py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-bold text-sm tracking-wider shadow-lg hover:shadow-emerald-500/15 transition-all duration-200 active:scale-[0.98]"
           >
             دور بعد
-          </button>
-
-          {/* Hard Restart Button - Secondary Action */}
-          <button
-            type="button"
-            onClick={onRestartGame}
-            className="w-full py-3 rounded-xl border border-slate-700 text-slate-300 font-semibold text-sm hover:bg-slate-800 hover:text-white transition-all duration-200 active:scale-[0.98]"
-          >
-            شروع مجدد
           </button>
 
           {/* Leave Button - Neutral/Exit Action */}
