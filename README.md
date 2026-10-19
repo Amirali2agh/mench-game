@@ -188,12 +188,13 @@ python -m pytest -q
 # Frontend
 cd front
 npx tsc --noEmit
+npm run lint
 npm test
 npx vite build
 ```
 
 The suite uses an in-memory Redis fake, so no Redis server is needed to run the
-tests. The same four commands run in CI (`.github/workflows/ci.yml`), one job
+tests. The same five commands run in CI (`.github/workflows/ci.yml`), one job
 each, plus a secret scan. Do not merge a pull request with a red gate.
 
 ## Repository layout

@@ -1,32 +1,31 @@
 /**
  * Message bridge to parent app (Porteghal WebView/iframe).
  */
-import { resolveApiBaseUrl, resolveWsBaseUrl } from "./backendOrigin";
+import { resolveApiBaseUrl, resolveWsBaseUrl } from "./backendOrigin.ts";
+
+/** The React Native WebView injects this handle into the page. */
+interface BridgeWindow extends Window {
+  ReactNativeWebView?: { postMessage?: (message: string) => void };
+}
 
 export function sendToParent(
   type: string,
-  payload?: Record<string, any>,
+  payload?: Record<string, unknown>,
 ): void {
   const message = JSON.stringify({ type, ...payload });
 
+  if (typeof window === "undefined") return;
+  const bridgeWindow = window as unknown as BridgeWindow;
+
   // React Native WebView bridge
-  if (
-    typeof window !== "undefined" &&
-    (window as any).ReactNativeWebView?.postMessage
-  ) {
-    (window as any).ReactNativeWebView.postMessage(message);
-  }
-  // Standard iframe parent communication
-  if (
-    typeof window !== "undefined" &&
-    window.parent &&
-    window.parent !== window
-  ) {
+  bridgeWindow.ReactNativeWebView?.postMessage?.(message);
+
+  // Standard iframe parent communication, with a console fallback when the
+  // game runs standalone.
+  if (window.parent && window.parent !== window) {
     window.parent.postMessage(message, "*");
-  }
-  // Standalone fallback
-  else {
-    console.log("[Bridge]", message);
+  } else {
+    console.debug("[Bridge]", message);
   }
 }
 

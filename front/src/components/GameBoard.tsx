@@ -1,7 +1,14 @@
 // front/src/components/GameBoard.tsx
 // Complete visual redesign matching the reference Ludo game UI
 
-import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { GameState } from "../types";
 import { playerColors } from "../utils/colors";
 import {
@@ -140,9 +147,19 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   } | null>(null);
   const [rollingRollId, setRollingRollId] = useState<number | null>(null);
 
+  // Every hook below must run on every render, so derive safe values first and
+  // only then render the loading state.
+  const players = useMemo(() => gameState?.players ?? [], [gameState?.players]);
+  const pieces = useMemo(() => gameState?.pieces ?? {}, [gameState?.pieces]);
+  const pieces_count = gameState?.pieces_count ?? 4;
+  const current_turn = gameState?.current_turn ?? 0;
+  const lastRoll = gameState?.last_roll ?? null;
+  const localPlayerIdx = players.findIndex((p) => p?.id === localPlayerId);
+  const isMyTurn = current_turn === localPlayerIdx;
+  const localDice = gameState?.dice ?? null;
+
   // Keep an automatic pass result visible briefly, even after current_turn advances.
   useEffect(() => {
-    const lastRoll = gameState?.last_roll;
     if (!lastRoll) {
       setVisibleRoll(null);
       return;
@@ -163,7 +180,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       1300,
     );
     return () => window.clearTimeout(timer);
-  }, [gameState?.last_roll?.roll_id]);
+  }, [lastRoll]);
 
   // ═══ Step-by-step piece animation state ═══
   const realPositionsRef = useRef<Record<string, number>>({});
@@ -180,19 +197,6 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
 
-  if (!gameState || !gameState.players || !gameState.pieces) {
-    return (
-      <div className="fixed inset-0 bg-[#F9F6F0] flex items-center justify-center">
-        <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-amber-500"></div>
-      </div>
-    );
-  }
-
-  const { players, current_turn, pieces, pieces_count } =
-    gameState;
-  const localPlayerIdx = players.findIndex((p) => p?.id === localPlayerId);
-  const isMyTurn = current_turn === localPlayerIdx;
-  const localDice = gameState.dice;
 
   const getVisualIdx = (backendIdx: number) => {
     // Player indices are also the color indices. Keep a piece on its own
@@ -234,30 +238,33 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     }
   });
 
-  const isPieceMovable = (pieceIdx: number): boolean => {
-    if (!isMyTurn || !gameState.dice_rolled) return false;
-    const myPieces = pieces[localPlayerId] || [];
-    const currentPos = myPieces[pieceIdx];
-    if (currentPos === undefined) return false;
-    if (currentPos === -1 && localDice !== 6) return false;
-    if (localDice && currentPos !== -1) {
-      const targetPos = currentPos + localDice;
-      if (targetPos > 43) return false;
-      if (
-        targetPos >= 40 &&
-        myPieces.some(
-          (position, index) => index !== pieceIdx && position === targetPos,
-        )
-      ) {
-        return false;
+  const isPieceMovable = useCallback(
+    (pieceIdx: number): boolean => {
+      if (!isMyTurn || !gameState?.dice_rolled) return false;
+      const myPieces = pieces[localPlayerId] || [];
+      const currentPos = myPieces[pieceIdx];
+      if (currentPos === undefined) return false;
+      if (currentPos === -1 && localDice !== 6) return false;
+      if (localDice && currentPos !== -1) {
+        const targetPos = currentPos + localDice;
+        if (targetPos > 43) return false;
+        if (
+          targetPos >= 40 &&
+          myPieces.some(
+            (position, index) => index !== pieceIdx && position === targetPos,
+          )
+        ) {
+          return false;
+        }
       }
-    }
-    return true;
-  };
+      return true;
+    },
+    [gameState?.dice_rolled, isMyTurn, localDice, localPlayerId, pieces],
+  );
 
   const autoActionRollRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isMyTurn || !gameState.dice_rolled || localDice === null) {
+    if (!isMyTurn || !gameState?.dice_rolled || localDice === null) {
       autoActionRollRef.current = null;
       return;
     }
@@ -283,7 +290,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     return () => window.clearTimeout(timer);
   }, [
     current_turn,
-    gameState.dice_rolled,
+    gameState?.dice_rolled,
+    isPieceMovable,
     isMyTurn,
     localDice,
     localPlayerId,
@@ -292,7 +300,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   ]);
 
   const handleDiceClick = () => {
-    if (!isMyTurn || isSpinning || gameState.dice_rolled) return;
+    if (!isMyTurn || isSpinning || gameState?.dice_rolled) return;
     setIsSpinning(true);
     onRollDice();
   };
@@ -399,11 +407,12 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           playerPieces[i] !== undefined ? playerPieces[i] : -1;
       }
     });
-  }, [gameState?.pieces]);
+  }, [animInitialized, gameState?.pieces, pieces, pieces_count, players]);
 
   useEffect(() => {
+    const timers = animTimersRef.current;
     return () => {
-      Object.values(animTimersRef.current).forEach(clearInterval);
+      Object.values(timers).forEach(clearInterval);
     };
   }, []);
 
@@ -435,7 +444,13 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         turnTimerRef.current = null;
       }
     };
-  }, [gameState?.current_turn, gameState?.status, onPassTurn]);
+  }, [
+    current_turn,
+    gameState?.current_turn,
+    gameState?.status,
+    localPlayerIdx,
+    onPassTurn,
+  ]);
 
   useEffect(() => {
     // Drive the latch from the roll flag only: a leftover dice value must never
@@ -444,6 +459,14 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       hasActedRef.current = true;
     }
   }, [gameState?.dice_rolled]);
+
+  if (!gameState || !gameState.players || !gameState.pieces) {
+    return (
+      <div className="fixed inset-0 bg-[#F9F6F0] flex items-center justify-center">
+        <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-amber-500"></div>
+      </div>
+    );
+  }
 
   const getColorForVisualIdx = (vIdx: number): string => {
     const map: Record<number, string> = {
