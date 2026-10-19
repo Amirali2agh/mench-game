@@ -22,6 +22,10 @@ def test_default_settings():
     assert settings.DISCONNECT_TIMEOUT == 60
     assert settings.MATCHMAKING_TIMEOUT == 30
 
+    # Same-origin deployments need no CORS; the default allowlist is empty.
+    assert settings.ALLOWED_CORS_ORIGINS == ""
+    assert settings.cors_origins == []
+
 
 def test_settings_override_via_env():
     """تست بررسی اینکه آیا تنظیمات با متغیرهای محیطی به درستی بازنویسی و تبدیل نوع می‌شوند یا خیر"""

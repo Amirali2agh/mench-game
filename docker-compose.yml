@@ -27,6 +27,7 @@ services:
       - REDIS_PORT=6379
       - PORTEGHAL_API_URL=${PORTEGHAL_API_URL:-http://pocketbase:8090}
       - PORTEGHAL_API_KEY=${PORTEGHAL_API_KEY}
+      - ALLOWED_CORS_ORIGINS=${ALLOWED_CORS_ORIGINS:-}
     # Ensure the web app waits until the Redis container is healthy
     depends_on:
       redis:

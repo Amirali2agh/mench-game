@@ -11,20 +11,28 @@ app = FastAPI(
     debug=settings.DEBUG
 )
 
-# Set up CORS middleware to allow cross-origin requests
-origins_setting = settings.ALLOWED_CORS_ORIGINS
-if origins_setting == "*":
-    cors_origins = ["*"]
-else:
-    cors_origins = [o.strip() for o in origins_setting.split(",")]
+def configure_cors(application: FastAPI, origins: list[str]) -> None:
+    """
+    Allow only the configured browser origins to call the API.
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    The client is normally served by the same reverse proxy as the API, so no
+    CORS headers are needed at all. When the frontend lives on another origin
+    the allowlist is explicit; the API has no cookie session, so credentials
+    stay disabled and the method/header lists stay minimal.
+    """
+    if not origins:
+        return
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+        allow_credentials=False,
+        max_age=600,
+    )
+
+
+configure_cors(app, settings.cors_origins)
 
 # Include application routers
 app.include_router(health_router)
