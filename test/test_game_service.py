@@ -62,6 +62,7 @@ def test_center_position_is_not_a_valid_follow_up_move():
 
 def test_landing_on_an_opponent_piece_sends_it_back_to_base():
     state = {
+        "player_count": 4,
         "players": [{"id": "red"}, {"id": "blue"}],
         "pieces": {
             "red": [10, -1, -1, -1],
@@ -77,6 +78,7 @@ def test_landing_on_an_opponent_piece_sends_it_back_to_base():
 
 def test_landing_on_an_opponent_home_or_base_piece_does_not_capture_it():
     state = {
+        "player_count": 4,
         "players": [{"id": "red"}, {"id": "blue"}],
         "pieces": {
             "red": [40, -1, -1, -1],
@@ -92,6 +94,7 @@ def test_landing_on_an_opponent_home_or_base_piece_does_not_capture_it():
 
 def test_landing_can_capture_all_opponents_on_the_same_track_cell():
     state = {
+        "player_count": 4,
         "players": [{"id": "red"}, {"id": "blue"}, {"id": "green"}],
         "pieces": {
             "red": [10, -1, -1, -1],
