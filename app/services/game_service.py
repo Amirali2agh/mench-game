@@ -8,6 +8,7 @@ from app.services.board_layout import (
     track_offsets_for_state,
 )
 from app.utils.redis_keys import RedisKeys
+from app.utils.room_lock import room_lock
 
 HOME_START_POSITION = 40
 HOME_END_POSITION = 43
@@ -66,6 +67,7 @@ class GameService:
             "eliminated_players": [],
             "last_roll": None,
             "coin_bet": coin_bet,
+            "version": 0,
             # Seat -> absolute track offset, so clients never re-implement the
             # seat plan shared by both player counts.
             "track_offsets": list(track_offsets(player_count)),
@@ -83,86 +85,89 @@ class GameService:
 
     @staticmethod
     async def save_game(room_id: str, state: dict) -> None:
+        # Bump the version on every write so clients can drop out-of-order
+        # sync_state messages.
+        state["version"] = int(state.get("version", 0)) + 1
         await redis_client.set(RedisKeys.room_state(room_id), json.dumps(state), ex=7200)
 
     @staticmethod
     async def roll_dice(room_id: str, player_id: str) -> dict:
-        state = await GameService.get_game(room_id)
-        if not state:
-            raise ValueError("Game not active")
-        GameService._ensure_can_act(state, player_id)
+        async with room_lock(room_id):
+            state = await GameService.get_game(room_id)
+            if not state:
+                raise ValueError("Game not active")
+            GameService._ensure_can_act(state, player_id)
 
-        if state["dice_rolled"]:
-            raise ValueError("Dice already rolled")
+            if state["dice_rolled"]:
+                raise ValueError("Dice already rolled")
 
-        rolled = random.randint(1, 6)
-        state["roll_sequence"] = state.get("roll_sequence", 0) + 1
-        state["dice"] = rolled
-        state["last_roll"] = {
-            "player_id": player_id,
-            "value": rolled,
-            "roll_id": state["roll_sequence"],
-        }
-        state["dice_rolled"] = True
+            rolled = random.randint(1, 6)
+            state["roll_sequence"] = state.get("roll_sequence", 0) + 1
+            state["dice"] = rolled
+            state["last_roll"] = {
+                "player_id": player_id,
+                "value": rolled,
+                "roll_id": state["roll_sequence"],
+            }
+            state["dice_rolled"] = True
 
-        # بررسی قانون ۳ بار تاس ۶ پیاپی (سوختن نوبت)
-        if rolled == 6:
-            consecutive = state.get("consecutive_sixes", 0) + 1
-            state["consecutive_sixes"] = consecutive
-            
-            if consecutive == 3:
-                # نوبت می‌سوزد، اما ابتدا تاس را نشان می‌دهیم سپس نوبت را عوض می‌کنیم
-                return await GameService._animate_and_pass_turn(room_id, state)
-        else:
-            state["consecutive_sixes"] = 0
+            # Three consecutive sixes burn the turn.
+            pass_turn = False
+            if rolled == 6:
+                consecutive = state.get("consecutive_sixes", 0) + 1
+                state["consecutive_sixes"] = consecutive
+                if consecutive == 3:
+                    pass_turn = True
+            else:
+                state["consecutive_sixes"] = 0
 
-        # بررسی اینکه آیا بازیکن اصلاً حرکت مجازی دارد یا خیر؟
-        has_moves = GameService._player_has_valid_moves(state, player_id, rolled)
+            # A player without a legal move cannot keep the turn.
+            if not pass_turn and not GameService._player_has_valid_moves(
+                state, player_id, rolled
+            ):
+                pass_turn = True
 
-        if not has_moves:
-            # بازیکن گیر کرده است! انتقال خودکار نوبت با تأخیر انیمیشن
+            await GameService.save_game(room_id, state)
+
+        if pass_turn:
+            # The animation wait happens outside the lock on purpose.
             return await GameService._animate_and_pass_turn(room_id, state)
-
-        # اگر حرکت مجاز داشت، فقط وضعیت را ذخیره می‌کنیم تا خودش مهره را تکان دهد
-        await GameService.save_game(room_id, state)
         return state
 
     @staticmethod
     async def _animate_and_pass_turn(room_id: str, state: dict) -> dict:
         """
-        متد کمکی حرفه‌ای: وضعیت تاس را به همه می‌فرستد، ۱.۵ ثانیه صبر می‌کند تا 
-        انیمیشن در فرانت‌اند تمام شود، سپس نوبت را به نفر بعدی پاس می‌دهد.
+        Broadcast the roll, wait for the client animation, then advance the turn.
+
+        The wait runs outside the room lock; the check-and-rotate after the wait
+        runs inside it, so a pass_turn (or any other action) that landed during
+        the animation can never rotate the turn twice.
         """
-        # ایمپورت محلی برای جلوگیری از Circular Import
+        # Local import to avoid a circular import at module load time.
         try:
             from app.managers.room_manager import room_manager
         except ImportError:
             room_manager = None
 
-        # ۱. ذخیره و ارسال وضعیت فعلی (برای نمایش عدد تاس به همه بازیکنان)
-        await GameService.save_game(room_id, state)
         if room_manager:
             await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
-        
-        # ۲. مکث برای نمایش نتیجه تاس پیش از تغییر نوبت
+
         await asyncio.sleep(2)
-        
-        # A client may have passed the blocked turn while the dice was shown.
-        # Only rotate if this roll is still waiting for a move.
-        latest_state = await GameService.get_game(room_id)
-        if latest_state and (
-            latest_state["current_turn"] != state["current_turn"]
-            or not latest_state["dice_rolled"]
-        ):
-            return latest_state
 
-        # ۳. تغییر نوبت و ریست کردن وضعیت تاس
-        state = GameService._rotate_turn(latest_state or state)
-        await GameService.save_game(room_id, state)
+        async with room_lock(room_id):
+            latest_state = await GameService.get_game(room_id)
+            if latest_state and (
+                latest_state["current_turn"] != state["current_turn"]
+                or not latest_state["dice_rolled"]
+            ):
+                # Someone already ended this turn while the dice was shown.
+                return latest_state
+            rotated = GameService._rotate_turn(latest_state or state)
+            await GameService.save_game(room_id, rotated)
+
         if room_manager:
-            await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
-
-        return state
+            await room_manager.broadcast(room_id, {"type": "sync_state", "game": rotated})
+        return rotated
 
     @staticmethod
     async def move_piece(
@@ -170,50 +175,53 @@ class GameService:
         player_id: str,
         piece_index: int,
     ) -> dict:
-        state = await GameService.get_game(room_id)
-        if not state:
-            raise ValueError("Game not active")
-        GameService._ensure_can_act(state, player_id)
+        async with room_lock(room_id):
+            state = await GameService.get_game(room_id)
+            if not state:
+                raise ValueError("Game not active")
+            GameService._ensure_can_act(state, player_id)
 
-        if not state["dice_rolled"]:
-            raise ValueError("Must roll dice first")
+            if not state["dice_rolled"]:
+                raise ValueError("Must roll dice first")
 
-        pieces_count = state.get("pieces_count", 4)
-        if piece_index < 0 or piece_index >= pieces_count:
-            raise ValueError("Invalid piece index")
+            pieces_count = state.get("pieces_count", 4)
+            if piece_index < 0 or piece_index >= pieces_count:
+                raise ValueError("Invalid piece index")
 
-        dice = state["dice"]
-        if dice is None:
-            raise ValueError("Dice result is unavailable")
-        player_pieces = state["pieces"][player_id]
-        current_pos = player_pieces[piece_index]
+            dice = state["dice"]
+            if dice is None:
+                raise ValueError("Dice result is unavailable")
+            player_pieces = state["pieces"][player_id]
+            current_pos = player_pieces[piece_index]
 
-        is_valid, new_pos = GameService._calculate_new_position(current_pos, dice)
-        if not is_valid:
-            raise ValueError("Invalid move selection")
-        if not GameService._is_home_position_available(
-            player_pieces, piece_index, new_pos
-        ):
-            raise ValueError("Home cell is already occupied")
+            is_valid, new_pos = GameService._calculate_new_position(current_pos, dice)
+            if not is_valid:
+                raise ValueError("Invalid move selection")
+            if not GameService._is_home_position_available(
+                player_pieces, piece_index, new_pos
+            ):
+                raise ValueError("Home cell is already occupied")
 
-        player_pieces[piece_index] = new_pos
+            player_pieces[piece_index] = new_pos
 
-        captured = False
-        if 0 <= new_pos <= 39:
-            captured = GameService._handle_captures(state, player_id, new_pos)
+            captured = False
+            if 0 <= new_pos <= 39:
+                captured = GameService._handle_captures(state, player_id, new_pos)
 
-        if all(HOME_START_POSITION <= pos <= HOME_END_POSITION for pos in player_pieces):
-            state["status"] = "finished"
-            state["winner_id"] = player_id
-        else:
-            if dice == 6 or captured:
-                state["dice"] = None
-                state["dice_rolled"] = False
+            if all(
+                HOME_START_POSITION <= pos <= HOME_END_POSITION for pos in player_pieces
+            ):
+                state["status"] = "finished"
+                state["winner_id"] = player_id
             else:
-                state = GameService._rotate_turn(state)
+                if dice == 6 or captured:
+                    state["dice"] = None
+                    state["dice_rolled"] = False
+                else:
+                    state = GameService._rotate_turn(state)
 
-        await GameService.save_game(room_id, state)
-        return state
+            await GameService.save_game(room_id, state)
+            return state
 
     @staticmethod
     async def pass_turn(room_id: str, player_id: str) -> dict:
@@ -224,19 +232,20 @@ class GameService:
         pass. Passing while a legal move is still on the board is refused: it
         would let a player skip a turn instead of playing it.
         """
-        state = await GameService.get_game(room_id)
-        if not state:
-            raise ValueError("Game not active")
-        GameService._ensure_can_act(state, player_id)
+        async with room_lock(room_id):
+            state = await GameService.get_game(room_id)
+            if not state:
+                raise ValueError("Game not active")
+            GameService._ensure_can_act(state, player_id)
 
-        dice = state.get("dice")
-        if state.get("dice_rolled") and dice is not None:
-            if GameService._player_has_valid_moves(state, player_id, dice):
-                raise ValueError("You still have a legal move")
+            dice = state.get("dice")
+            if state.get("dice_rolled") and dice is not None:
+                if GameService._player_has_valid_moves(state, player_id, dice):
+                    raise ValueError("You still have a legal move")
 
-        state = GameService._rotate_turn(state)
-        await GameService.save_game(room_id, state)
-        return state
+            state = GameService._rotate_turn(state)
+            await GameService.save_game(room_id, state)
+            return state
 
     @staticmethod
     def _player_has_valid_moves(state: dict, player_id: str, dice: int) -> bool:

@@ -35,6 +35,16 @@ class RedisKeys:
         return f"player:{player_id}:room"
 
     @staticmethod
+    def room_lock(room_id: str) -> str:
+        """
+        Returns the key of the short-lived mutation lease of a room.
+
+        Every read-modify-write of the room document or the game state runs
+        while holding this lock, so concurrent actions cannot lose updates.
+        """
+        return f"room:{room_id}:lock"
+
+    @staticmethod
     def player_queue(player_id: str) -> str:
         """
         Returns the key remembering which matchmaking queue a player joined.

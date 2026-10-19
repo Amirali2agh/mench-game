@@ -7,6 +7,7 @@ from app.services import room_service as RoomService
 from app.services.game_service import GameService
 from app.redis_client import redis_client
 from app.services.prize_service import report_winner, update_room_status
+from app.utils.room_lock import room_lock
 
 logger = logging.getLogger(__name__)
 
@@ -22,31 +23,33 @@ async def forfeit_active_player(room_id: str, player_id: str) -> None:
     going, so a single dropped client can never hand the prize to an arbitrary
     opponent. The winner is reported once per match by ``report_game_winner``.
     """
-    state = await GameService.get_game(room_id)
-    if not state or state.get("status") != "playing":
-        return
+    async with room_lock(room_id):
+        state = await GameService.get_game(room_id)
+        if not state or state.get("status") != "playing":
+            return
 
-    players = state.get("players") or []
-    if player_id not in {player["id"] for player in players}:
-        return
+        players = state.get("players") or []
+        if player_id not in {player["id"] for player in players}:
+            return
 
-    eliminated = list(state.get("eliminated_players") or [])
-    if player_id in eliminated:
-        return
-    eliminated.append(player_id)
-    state["eliminated_players"] = eliminated
+        eliminated = list(state.get("eliminated_players") or [])
+        if player_id in eliminated:
+            return
+        eliminated.append(player_id)
+        state["eliminated_players"] = eliminated
 
-    remaining = [player for player in players if player["id"] not in eliminated]
-    if len(remaining) <= 1:
-        state["status"] = "finished"
-        state["winner_id"] = remaining[0]["id"] if remaining else None
-        state["dice"] = None
-        state["dice_rolled"] = False
-    elif state["players"][GameService._current_player_index(state)]["id"] == player_id:
-        # The seat that just dropped out was on turn: pass it along.
-        state = GameService._rotate_turn(state)
+        remaining = [player for player in players if player["id"] not in eliminated]
+        if len(remaining) <= 1:
+            state["status"] = "finished"
+            state["winner_id"] = remaining[0]["id"] if remaining else None
+            state["dice"] = None
+            state["dice_rolled"] = False
+        elif state["players"][GameService._current_player_index(state)]["id"] == player_id:
+            # The seat that just dropped out was on turn: pass it along.
+            state = GameService._rotate_turn(state)
 
-    await GameService.save_game(room_id, state)
+        await GameService.save_game(room_id, state)
+
     await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
     await report_game_winner(room_id, state)
 
