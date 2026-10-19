@@ -6,6 +6,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { GameState, ServerMessage, ClientAction, GameInfoMessage } from '../types';
 import { sendToParent, getQueryParams, getWsBaseUrl } from '../utils/bridge';
+import { createPlayerId } from '../utils/playerIdentity';
 import type { ConnectionHealth } from '../components/OwnConnectionOverlay';
 
 // Connection state types for tracking the exact network status.
@@ -52,12 +53,14 @@ export function useMenschSocket() {
   const diceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptedRef = useRef(false);
 
-  const [playerId, _setPlayerId] = useState<string>(externalPlayerId || `p-${crypto.randomUUID()}`);
+  const [playerId, _setPlayerId] = useState<string>(
+    externalPlayerId || createPlayerId()
+  );
   const [playerName, setPlayerName] = useState<string>(externalPlayerName);
   const [playerAvatar, setPlayerAvatar] = useState<string>(externalPlayerAvatar);
   const [roomId, setRoomId] = useState<string | null>(directRoomId);
 
-  const wsBaseUrl = getWsBaseUrl(8000);
+  const wsBaseUrl = getWsBaseUrl();
 
   // Post GAME_FINISHED to parent when game ends
   useEffect(() => {

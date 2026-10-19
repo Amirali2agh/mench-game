@@ -98,8 +98,11 @@ npm ci
 npm run dev                   # Vite dev server on http://localhost:3000
 ```
 
-The client connects to the backend on port 8000 of the page's host. In the
-default dev setup that is `localhost:8000`, which the backend serves directly.
+The client never hard-codes a backend host. `npm run dev` falls back to port
+8000 of the page host, while a production build uses its own origin (`/api` and
+`/ws`, forwarded by the reverse proxy). Set `VITE_API_BASE_URL` and
+`VITE_WS_BASE_URL` at build time to point it somewhere else; see
+`front/.env.example` and `docs/deployment.md`.
 
 ## Configuration
 
@@ -121,6 +124,18 @@ The backend reads environment variables (and `.env`) through
 | `ALLOWED_CORS_ORIGINS` | `*` | Comma-separated origin allowlist |
 
 Never commit a real `PORTEGHAL_API_KEY`. It is read from the environment only.
+
+The frontend has its own build-time configuration, documented in
+`front/.env.example`:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `VITE_API_BASE_URL` | empty (same origin) | REST origin, e.g. `https://api.example.com` |
+| `VITE_WS_BASE_URL` | empty (page host) | WebSocket origin, e.g. `wss://api.example.com` |
+| `VITE_ALLOWED_HOSTS` | empty (check disabled) | Dev-server host allowlist, comma separated |
+
+`npm run dev` keeps working with nothing configured: it points at port 8000 of
+the page host, where the documented local backend listens.
 
 ## Rules the engine enforces
 
