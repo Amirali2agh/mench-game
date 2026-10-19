@@ -10,6 +10,7 @@ import json
 
 from app.redis_client import redis_client
 from app.services.game_service import GameService
+from app.utils.room_lock import room_lock
 
 DEFAULT_PLAYER_COUNT = 2
 DEFAULT_PIECES_COUNT = 4
@@ -93,60 +94,70 @@ async def register_player(
     """Seat ``player`` in the first free slot.
 
     Returns ``(room, seat, error)``. Re-registering a seated player is a no-op,
-    which keeps WebSocket reconnects idempotent.
+    which keeps WebSocket reconnects idempotent. The read-modify-write runs
+    under the room lock so two players connecting at the same time can never be
+    seated in the same slot.
     """
-    room = await get_room(room_id)
-    if room is None:
-        return None, None, "Room not found"
+    async with room_lock(room_id):
+        room = await get_room(room_id)
+        if room is None:
+            return None, None, "Room not found"
 
-    existing_seat = seat_of(room, player["id"])
-    if existing_seat is not None:
-        return room, existing_seat, None
+        existing_seat = seat_of(room, player["id"])
+        if existing_seat is not None:
+            return room, existing_seat, None
 
-    capacity = required_players(room)
-    if len(roster(room)) >= capacity:
-        return room, None, "Room is full"
-    if room.get("status") != ROOM_STATUS_WAITING:
-        return room, None, "Room is no longer accepting players"
+        capacity = required_players(room)
+        if len(roster(room)) >= capacity:
+            return room, None, "Room is full"
+        if room.get("status") != ROOM_STATUS_WAITING:
+            return room, None, "Room is no longer accepting players"
 
-    players_meta = room.setdefault("players_meta", {})
-    open_seat = next(
-        (
-            seat
-            for seat in range(1, capacity + 1)
-            if not (players_meta.get(str(seat)) or {}).get("id")
-        ),
-        None,
-    )
-    if open_seat is None:
-        return room, None, "Room is full"
+        players_meta = room.setdefault("players_meta", {})
+        open_seat = next(
+            (
+                seat
+                for seat in range(1, capacity + 1)
+                if not (players_meta.get(str(seat)) or {}).get("id")
+            ),
+            None,
+        )
+        if open_seat is None:
+            return room, None, "Room is full"
 
-    players_meta[str(open_seat)] = player
-    room["players"] = [entry["id"] for entry in roster(room)]
-    await save_room(room_id, room)
-    return room, open_seat, None
+        players_meta[str(open_seat)] = player
+        room["players"] = [entry["id"] for entry in roster(room)]
+        await save_room(room_id, room)
+        return room, open_seat, None
 
 
 async def start_game(room_id: str, room: dict) -> dict | None:
     """Create the game state once the roster is complete, otherwise ``None``."""
-    state = await GameService.get_game(room_id)
-    if state:
+    async with room_lock(room_id):
+        current = await get_room(room_id)
+        if current is None:
+            return None
+        # Keep the caller's view of the roster in sync with the stored one.
+        room.update(current)
+
+        state = await GameService.get_game(room_id)
+        if state:
+            return state
+
+        if not is_full(room):
+            return None
+
+        state = await GameService.create_game(
+            room_id,
+            roster(room),
+            pieces_count=pieces_count(room),
+            player_count=required_players(room),
+            coin_bet=coin_bet(room),
+        )
+        room["players"] = [entry["id"] for entry in roster(room)]
+        room["status"] = ROOM_STATUS_PLAYING
+        await save_room(room_id, room)
         return state
-
-    if not is_full(room):
-        return None
-
-    state = await GameService.create_game(
-        room_id,
-        roster(room),
-        pieces_count=pieces_count(room),
-        player_count=required_players(room),
-        coin_bet=coin_bet(room),
-    )
-    room["players"] = [entry["id"] for entry in roster(room)]
-    room["status"] = ROOM_STATUS_PLAYING
-    await save_room(room_id, room)
-    return state
 
 
 async def wait_for_game(room_id: str, timeout: float) -> dict | None:
@@ -188,36 +199,40 @@ async def start_rematch(room_id: str, player_id: str) -> dict:
     """Restart a finished match with the same roster and settings.
 
     Only a seated player may restart, and only once the previous match is over,
-    so a rematch can never wipe a game that is still being played.
+    so a rematch can never wipe a game that is still being played. The lock
+    makes the "is it finished?" check and the replacement state one step: two
+    simultaneous rematch requests cannot both reset the board.
     """
-    room = await get_room(room_id)
-    if room is None:
-        raise ValueError("Room not found")
+    async with room_lock(room_id):
+        room = await get_room(room_id)
+        if room is None:
+            raise ValueError("Room not found")
 
-    state = await GameService.get_game(room_id)
-    if state is None:
-        raise ValueError("Game not found")
-    if state.get("status") != "finished":
-        raise ValueError("The current game is still in progress")
+        state = await GameService.get_game(room_id)
+        if state is None:
+            raise ValueError("Game not found")
+        if state.get("status") != "finished":
+            raise ValueError("The current game is still in progress")
 
-    players = state.get("players") or []
-    if player_id not in {player["id"] for player in players}:
-        raise ValueError("Only a seated player can start a rematch")
+        players = state.get("players") or []
+        if player_id not in {player["id"] for player in players}:
+            raise ValueError("Only a seated player can start a rematch")
 
-    new_state = await GameService.create_game(
-        room_id,
-        players,
-        pieces_count=int(state.get("pieces_count") or pieces_count(room)),
-        player_count=int(state.get("player_count") or required_players(room)),
-        coin_bet=coin_bet(room) or int(state.get("coin_bet") or 0),
-    )
-    room["status"] = ROOM_STATUS_PLAYING
-    await save_room(room_id, room)
-    await clear_winner_report(room_id)
-    return new_state
+        new_state = await GameService.create_game(
+            room_id,
+            players,
+            pieces_count=int(state.get("pieces_count") or pieces_count(room)),
+            player_count=int(state.get("player_count") or required_players(room)),
+            coin_bet=coin_bet(room) or int(state.get("coin_bet") or 0),
+        )
+        room["status"] = ROOM_STATUS_PLAYING
+        await save_room(room_id, room)
+        await clear_winner_report(room_id)
+        return new_state
 
 
 async def cancel_room(room_id: str, room: dict) -> None:
     """Close a room whose roster could not be completed in time."""
-    room["status"] = ROOM_STATUS_CANCELLED
-    await save_room(room_id, room)
+    async with room_lock(room_id):
+        room["status"] = ROOM_STATUS_CANCELLED
+        await save_room(room_id, room)

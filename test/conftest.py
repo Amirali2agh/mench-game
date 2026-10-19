@@ -22,12 +22,19 @@ class FakeRedis:
         self.lists: dict[str, list[str]] = {}
 
     async def get(self, key: str):
-        return self.values.get(key)
+        value = self.values.get(key)
+        # Model a network round trip so concurrent coroutines actually
+        # interleave; without a yield the fake would hide lost-update bugs.
+        await asyncio.sleep(0)
+        return value
 
-    async def set(self, key: str, value, ex=None, nx: bool = False):
+    async def set(self, key: str, value, ex=None, px=None, nx: bool = False):
         if nx and key in self.values:
+            await asyncio.sleep(0)
             return None
+        # The nx check and the write are one atomic step, like SET NX.
         self.values[key] = value
+        await asyncio.sleep(0)
         return True
 
     async def delete(self, *keys: str) -> int:
@@ -72,14 +79,27 @@ class FakeRedis:
     async def eval(self, script: str, numkeys: int, *args):
         """Run the matchmaking claim script against the in-memory structures.
 
-        The fake implements exactly the one script the service uses; any other
-        script fails loudly instead of silently returning the wrong shape.
+        The fake implements the queue-claim and lock-release scripts the app
+        uses; any other script fails loudly instead of silently returning the
+        wrong shape.
         """
+        if "mensch:release-lock:v1" in script:
+            lock_key, token = args[0], str(args[1])
+            if self.values.get(lock_key) == token:
+                del self.values[lock_key]
+                return 1
+            return 0
+
         if "mensch:claim-queue:v1" not in script:
-            raise NotImplementedError("FakeRedis only implements the claim-queue script")
+            raise NotImplementedError("FakeRedis only implements the app's Lua scripts")
 
         keys = args[:numkeys]
         argv = args[numkeys:]
+        result = self._eval_atomic(keys, argv)
+        await asyncio.sleep(0)
+        return result
+
+    def _eval_atomic(self, keys, argv):
         queue_key, marker_key = keys
         player_id, target_players = str(argv[0]), int(argv[1])
 
@@ -133,6 +153,7 @@ REDIS_TARGETS = (
     "app.services.room_service.redis_client",
     "app.services.game_service.redis_client",
     "app.services.queue_service.redis_client",
+    "app.utils.room_lock.redis_client",
     "app.api.websocket.room.redis_client",
     "app.api.websocket.queue.redis_client",
     "app.api.rooms.redis_client",
