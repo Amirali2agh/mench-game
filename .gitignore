@@ -1,7 +1,20 @@
 __pycache__/
 *.pyc
-.env
 .venv/
 dist/
-front/node_modules/
 *.swp
+
+# Environment files (keep the example tracked)
+.env
+.env.*
+!.env.example
+
+# Node / Vite
+**/node_modules/
+.vite/
+
+# Windows alternate-data-stream markers
+*.Zone.Identifier
+
+# Local agent/tooling scratch space
+.hermes/
