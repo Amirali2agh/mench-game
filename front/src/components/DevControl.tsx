@@ -7,20 +7,14 @@
  */
 import { useEffect, useState, useCallback } from 'react';
 import { GameState } from '../types';
-import { getQueryParams } from '../utils/bridge';
+import { getApiBaseUrl, getQueryParams } from '../utils/bridge';
 
-const API_PORT = 8000;
 const COLOR_MAP: Record<number, string> = {
   0: '#F94144', // red
   1: '#277DA1', // blue
   2: '#43AA8B', // green
   3: '#F9C74F', // yellow
 };
-
-function apiBase(): string {
-  const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
-  return `${protocol}://${window.location.hostname}:${API_PORT}`;
-}
 
 // Mirrors the board's backend-index -> visual-corner mapping so colors match.
 function getVisualIdx(backendIdx: number, playerCount: number): number {
@@ -50,7 +44,7 @@ export function DevControl() {
 
   const fetchState = useCallback(async (id: string) => {
     try {
-      const res = await fetch(`${apiBase()}/api/dev/room/${encodeURIComponent(id)}`);
+      const res = await fetch(`${getApiBaseUrl()}/api/dev/room/${encodeURIComponent(id)}`);
       if (res.status === 404) {
         setGame(null);
         setError(`اتاق "${id}" پیدا نشد.`);
@@ -64,7 +58,7 @@ export function DevControl() {
       setGame(data);
       setError(null);
     } catch (e) {
-      setError('عدم دسترسی به بک‌اند (port 8000).');
+      setError('عدم دسترسی به بک‌اند. آدرس بک‌اند را بررسی کنید.');
     }
   }, []);
 
@@ -79,7 +73,7 @@ export function DevControl() {
     async (playerId: string, pieceIndex: number, position: number) => {
       if (!roomId) return;
       try {
-        const res = await fetch(`${apiBase()}/api/dev/room/${encodeURIComponent(roomId)}/place`, {
+        const res = await fetch(`${getApiBaseUrl()}/api/dev/room/${encodeURIComponent(roomId)}/place`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ player_id: playerId, piece_index: pieceIndex, position }),
@@ -93,7 +87,7 @@ export function DevControl() {
         setLastAction(`مهره ${pieceIndex + 1} ${position === -1 ? 'به پایه' : `به خانه ${position}`} رفت`);
         setTimeout(() => setLastAction(null), 2000);
       } catch (e) {
-        setError('عدم دسترسی به بک‌اند (port 8000).');
+        setError('عدم دسترسی به بک‌اند. آدرس بک‌اند را بررسی کنید.');
       }
     },
     [roomId]

@@ -1,6 +1,8 @@
 /**
  * Message bridge to parent app (Porteghal WebView/iframe).
  */
+import { resolveApiBaseUrl, resolveWsBaseUrl } from "./backendOrigin";
+
 export function sendToParent(
   type: string,
   payload?: Record<string, any>,
@@ -44,20 +46,29 @@ export function getQueryParams(): Record<string, string> {
 }
 
 /**
- * Get dynamic WS base URL from the current page hostname.
- * This makes the game work from any deployment (not just localhost).
+ * REST origin for the current build.
+ *
+ * A production build returns "" (same origin), so requests go through the
+ * reverse proxy; `VITE_API_BASE_URL` points the client at another origin.
  */
-export function getWsBaseUrl(_port: number = 8000): string {
-  const hostname = window.location.hostname || "localhost";
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${hostname}:8000`;
+export function getApiBaseUrl(): string {
+  return resolveApiBaseUrl({
+    apiBaseUrl: import.meta.env.VITE_API_BASE_URL,
+    location: window.location,
+    isDev: import.meta.env.DEV,
+  });
 }
 
 /**
- * Get dynamic HTTP base URL from the current page hostname.
+ * WebSocket origin for the current build.
+ *
+ * Production uses the page host, development falls back to the local backend
+ * port, and `VITE_WS_BASE_URL` overrides both.
  */
-export function getHttpBaseUrl(_port: number = 8000): string {
-  const hostname = window.location.hostname || "localhost";
-  const protocol = window.location.protocol || "http:";
-  return `${protocol}//${hostname}`;
+export function getWsBaseUrl(): string {
+  return resolveWsBaseUrl({
+    wsBaseUrl: import.meta.env.VITE_WS_BASE_URL,
+    location: window.location,
+    isDev: import.meta.env.DEV,
+  });
 }

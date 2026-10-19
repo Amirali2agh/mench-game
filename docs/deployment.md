@@ -85,12 +85,26 @@ npm ci
 npx vite build          # emits front/dist
 ```
 
-Serve `front/dist` from the reverse proxy. The built client derives the backend
-host from the page URL. Until an explicit backend origin is configured at build
-time, it targets port 8000 of the page host, so the proxy must expose that port
-or the client must be built with the production origin. The environment-based
-configuration is tracked as the follow-up to the URL-hardening issue; when it
-lands, `docs/deployment.md` and the proxy example below are the reference.
+Serve `front/dist` from the reverse proxy. With no build-time configuration the
+client is same-origin: REST calls go to `/api/...` and sockets to
+`ws(s)://<page-host>/ws/...`, which the proxy section below routes to the
+backend. That is the recommended production setup; the client bundle does not
+need to know the backend port.
+
+The origins are resolved from `VITE_API_BASE_URL` and `VITE_WS_BASE_URL` at
+build time (`front/.env.example`). Only set them when the API lives on another
+origin, e.g. a CDN-hosted client:
+
+```bash
+cd front
+npm ci
+VITE_API_BASE_URL=https://api.example.com \
+VITE_WS_BASE_URL=wss://api.example.com \
+npx vite build
+```
+
+`npm run dev` ignores the proxy and connects to port 8000 of the page host, so
+the local backend must listen there.
 
 ## 4. Reverse proxy (Caddy)
 
@@ -123,6 +137,9 @@ WebSocket upgrades need no extra configuration in Caddy; nginx needs
 - [ ] `PORTEGHAL_API_KEY` is set in the environment; the service logs an error
       and skips payouts when it is missing.
 - [ ] `ALLOWED_CORS_ORIGINS` lists the real origin instead of `*`.
+- [ ] The frontend was built with the intended `VITE_API_BASE_URL` and
+      `VITE_WS_BASE_URL` (both empty when the proxy serves `/api` and `/ws`),
+      and `VITE_ALLOWED_HOSTS` is only used for development.
 - [ ] TLS is terminated by the proxy; the client uses `wss://`.
 - [ ] `/health` is monitored and the Redis dependency is part of the alert.
 - [ ] Logs are collected (structured logging, no player secrets).
