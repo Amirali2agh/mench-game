@@ -1,7 +1,7 @@
 /**
  * @file src/components/DisconnectOverlay.tsx
  * @description Modal overlay that alerts players when an opponent disconnects.
- * Displays a 60-second real-time countdown forfeit timer in English.
+ * Displays a 60-second real-time countdown forfeit timer in Persian.
  */
 
 import React from 'react';
@@ -30,7 +30,7 @@ export const DisconnectOverlay: React.FC<DisconnectOverlayProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-45 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fade-in">
+    <div className="fixed inset-0 z-[45] flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fade-in">
       
       {/* Alert Card Box designed mobile-first */}
       <div className="w-full max-w-sm p-8 rounded-3xl bg-slate-900 border border-red-500/30 text-center shadow-2xl shadow-red-500/5 backdrop-blur-md">

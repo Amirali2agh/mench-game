@@ -1,6 +1,6 @@
 /**
  * @file src/components/LobbyScreen.tsx
- * @description Lobby registration form in English with premium styling.
+ * @description Lobby registration form in Persian with premium styling.
  * Supports Unicode inputs (like Persian characters) natively.
  */
 
