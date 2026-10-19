@@ -64,6 +64,47 @@ class FakeRedis:
         self.lists[key] = [item for item in items if item != value]
         return removed
 
+    async def ltrim(self, key: str, start: int, end: int) -> bool:
+        items = self.lists.get(key, [])
+        self.lists[key] = items[start:] if end == -1 else items[start : end + 1]
+        return True
+
+    async def eval(self, script: str, numkeys: int, *args):
+        """Run the matchmaking claim script against the in-memory structures.
+
+        The fake implements exactly the one script the service uses; any other
+        script fails loudly instead of silently returning the wrong shape.
+        """
+        if "mensch:claim-queue:v1" not in script:
+            raise NotImplementedError("FakeRedis only implements the claim-queue script")
+
+        keys = args[:numkeys]
+        argv = args[numkeys:]
+        queue_key, marker_key = keys
+        player_id, target_players = str(argv[0]), int(argv[1])
+
+        previous = self.values.get(marker_key)
+        if previous and previous != queue_key:
+            self.lists[previous] = [
+                item for item in self.lists.get(previous, []) if item != player_id
+            ]
+        self.lists[queue_key] = [
+            item for item in self.lists.get(queue_key, []) if item != player_id
+        ]
+        self.lists.setdefault(queue_key, []).append(player_id)
+        self.values[marker_key] = queue_key
+
+        if len(self.lists[queue_key]) < target_players:
+            return []
+
+        claimed = self.lists[queue_key][:target_players]
+        self.lists[queue_key] = self.lists[queue_key][target_players:]
+        for claimed_id in claimed:
+            claimed_marker = f"player:{claimed_id}:queue"
+            if self.values.get(claimed_marker) == queue_key:
+                del self.values[claimed_marker]
+        return claimed
+
     async def expire(self, key: str, seconds: int) -> bool:
         return True
 
