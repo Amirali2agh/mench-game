@@ -35,6 +35,16 @@ class RedisKeys:
         return f"player:{player_id}:room"
 
     @staticmethod
+    def player_queue(player_id: str) -> str:
+        """
+        Returns the key remembering which matchmaking queue a player joined.
+
+        It lets a player who changes player/piece counts leave the previous
+        queue atomically instead of being matchable from two queues at once.
+        """
+        return f"player:{player_id}:queue"
+
+    @staticmethod
     def queue_notifications(player_id: str) -> str:
         """
         Returns the per-player match inbox written by the matchmaking queue.
