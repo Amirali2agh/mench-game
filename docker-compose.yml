@@ -4,8 +4,15 @@ services:
   redis:
     image: redis:7-alpine
     container_name: mensch-redis
-    ports:
-      - "6379:6379"
+    # Redis has no password, so it is only reachable from the compose network
+    # instead of being published on the host.
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     restart: always
 
   # FastAPI Web Application Service
@@ -18,9 +25,10 @@ services:
       - DEBUG=${DEBUG:-false}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - PORTEGHAL_API_URL=http://pocketbase:8090
+      - PORTEGHAL_API_URL=${PORTEGHAL_API_URL:-http://pocketbase:8090}
       - PORTEGHAL_API_KEY=${PORTEGHAL_API_KEY}
-    # Ensure the web app waits until the Redis container is up and running
+    # Ensure the web app waits until the Redis container is healthy
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     restart: always
