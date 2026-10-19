@@ -61,3 +61,23 @@ pytest
 The test runner will automatically collect and execute all 16 unit and integration tests across routers, managers, and service files.
 Integration Spec for Frontend Developers
 For detailed integration spec including WebSocket endpoint schemas, query parameters, client gameplay actions (roll_dice, move_piece), and server broadcasts (sync_state), please refer to the ARCHITECTURE.md file in the root director
+
+---
+
+## License
+
+This software is **proprietary**, not open source. All rights reserved.
+
+Commercial use requires a paid license:
+
+| | |
+|---|---|
+| **Initial license** | USD **231** one-time, per organization |
+| **Annual renewal** | USD **66** / year, covering updates and email support |
+| **Attribution** | every product must display "Powered by [binux.tech](https://binux.tech)" |
+
+See [LICENSE](LICENSE) for the full terms.
+Licensing and purchase: **licensing@binux.tech** — https://binux.tech
+
+Third-party dependencies (React, Vite, FastAPI, …) remain under their own
+licenses and are not covered by this one.
