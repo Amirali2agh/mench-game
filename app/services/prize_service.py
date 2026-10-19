@@ -1,22 +1,43 @@
-import os
+import logging
+
 import httpx
 
-PORTEGHAL_API_URL = os.getenv("PORTEGHAL_API_URL", "http://localhost:8090")
-PORTEGHAL_API_KEY = os.getenv("PORTEGHAL_API_KEY", "t1rrI33VfJDbopVF9vfOjBVgtaKJb7P4XzQ37BQkqvw=")
-WINNER_ENDPOINT = f"{PORTEGHAL_API_URL}/api/internal/game-winner"
+from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def _auth_headers() -> dict[str, str] | None:
+    """
+    Build the headers for a Porteghal internal API call.
+
+    Returns None when no API key is configured. The key is never defaulted in
+    code: a missing key must disable the integration loudly instead of silently
+    authenticating with a value committed to the repository.
+    """
+    if not settings.PORTEGHAL_API_KEY:
+        logger.error(
+            "PORTEGHAL_API_KEY is not configured; skipping the Porteghal API call. "
+            "Set it in the environment before starting the service."
+        )
+        return None
+    return {"Content-Type": "application/json", "X-Api-Key": settings.PORTEGHAL_API_KEY}
 
 
 async def update_room_status(room_id: str, status: str) -> bool:
-    url = f"{PORTEGHAL_API_URL}/api/internal/game-rooms/update"
-    headers = {"Content-Type": "application/json", "X-Api-Key": PORTEGHAL_API_KEY}
+    headers = _auth_headers()
+    if headers is None:
+        return False
+
+    url = f"{settings.PORTEGHAL_API_URL}/api/internal/game-rooms/update"
     payload = {"roomId": room_id, "status": status}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             return True
-    except (httpx.HTTPError, httpx.RequestError) as exc:
-        print(f"Failed to update room {room_id} status: {exc}")
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to update room %s status: %s", room_id, exc)
         return False
 
 
@@ -27,6 +48,11 @@ async def report_winner(
     game_id: str = "mench",
     amount: int = 0,
 ) -> bool:
+    headers = _auth_headers()
+    if headers is None:
+        return False
+
+    url = f"{settings.PORTEGHAL_API_URL}/api/internal/game-winner"
     payload = {
         "player_id": player_id,
         "amount": amount,
@@ -34,12 +60,11 @@ async def report_winner(
         "win_type": win_type,
         "game_id": game_id,
     }
-    headers = {"Content-Type": "application/json", "X-Api-Key": PORTEGHAL_API_KEY}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(WINNER_ENDPOINT, json=payload, headers=headers)
+            response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             return True
-    except (httpx.HTTPError, httpx.RequestError) as exc:
-        print(f"Failed to report winner: {exc}")
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to report winner for room %s: %s", room_id, exc)
         return False
