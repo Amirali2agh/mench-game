@@ -1,8 +1,9 @@
 import json
-import asyncio
 import logging
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, status
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from app.config import settings
 from app.managers.room_manager import room_manager
+from app.services import room_service as RoomService
 from app.services.game_service import GameService
 from app.redis_client import redis_client
 from app.services.prize_service import report_winner, update_room_status
@@ -133,6 +134,62 @@ async def handle_gameplay_loop(
             await websocket.send_json({"type": "error", "message": f"An unexpected error occurred: {str(e)}"})
 
 
+async def _load_player_meta(player_id: str, player_name: str) -> dict:
+    """Prefer the stored player profile, fall back to the query parameters."""
+    raw = await redis_client.get(f"player:{player_id}:meta")
+    if raw:
+        return json.loads(raw)
+    return {"id": player_id, "name": player_name, "avatar": ""}
+
+
+async def _prepare_room(websocket: WebSocket, room_id: str, player: dict) -> dict | None:
+    """
+    Seat the connecting player and return a playable game state.
+
+    A room only starts once its configured roster is complete. Until then the
+    connected players receive ``waiting_for_players``; if the room is still
+    incomplete after ``MATCHMAKING_TIMEOUT`` it is cancelled and a
+    ``room_timeout`` message is broadcast. Returns ``None`` when the game could
+    not be started, in which case the caller closes the connection.
+    """
+    room = await RoomService.get_room(room_id)
+    if room is None:
+        room = RoomService.new_room(room_id)
+        await RoomService.save_room(room_id, room)
+
+    room, _seat, error = await RoomService.register_player(room_id, player)
+    if error or room is None:
+        await websocket.send_json(
+            {"type": "error", "message": error or "Room is unavailable"}
+        )
+        return None
+
+    state = await RoomService.start_game(room_id, room)
+    if state:
+        return state
+
+    await room_manager.broadcast(room_id, {
+        "type": "waiting_for_players",
+        "room_id": room_id,
+        "joined": len(RoomService.roster(room)),
+        "required": RoomService.required_players(room),
+        "players": RoomService.roster(room),
+    })
+
+    state = await RoomService.wait_for_game(room_id, settings.MATCHMAKING_TIMEOUT)
+    if state:
+        return state
+
+    await RoomService.cancel_room(room_id, room)
+    await room_manager.broadcast(room_id, {
+        "type": "room_timeout",
+        "room_id": room_id,
+        "joined": len(RoomService.roster(room)),
+        "required": RoomService.required_players(room),
+    })
+    return None
+
+
 @router.websocket("/ws/room/{room_id}")
 async def websocket_room_endpoint(
     websocket: WebSocket,
@@ -142,69 +199,18 @@ async def websocket_room_endpoint(
 ):
     """
     WebSocket endpoint for active Mensch game rooms.
-    The complete matchmaking roster is persisted in Redis so the first player
-    immediately receives a state containing every matched player.
+    The complete roster is persisted in Redis; the game starts as soon as every
+    configured seat is filled.
     """
     await room_manager.connect(room_id, playerId, websocket)
 
     try:
-        raw_room_meta = await redis_client.get(f"room:{room_id}:meta")
-        room_meta = json.loads(raw_room_meta) if raw_room_meta else {}
-        matched_players = [
-            player for player in room_meta.get("players_meta", {}).values()
-            if player.get("id")
-        ]
-
-        state = await GameService.get_game(room_id)
-        if not state:
-            raw_pieces_count = await redis_client.get(f"room:{room_id}:pieces_count")
-            pieces_count = int(room_meta.get("pieces_count", raw_pieces_count or 4))
-
-            raw_player_count = await redis_client.get(f"room:{room_id}:player_count")
-            player_count = int(room_meta.get("player_count", raw_player_count or len(matched_players) or 2))
-
-            if not matched_players:
-                player_meta = await redis_client.get(f"player:{playerId}:meta")
-                matched_players = [
-                    json.loads(player_meta) if player_meta else {
-                        "id": playerId,
-                        "name": playerName,
-                        "avatar": "",
-                    }
-                ]
-
-            state = await GameService.create_game(
-                room_id,
-                matched_players,
-                pieces_count,
-                player_count,
-            )
-        else:
-            known_ids = {p["id"] for p in state.get("players", [])}
-            changed = False
-
-            for player in matched_players:
-                if player["id"] not in known_ids:
-                    state["players"].append(player)
-                    state.setdefault("pieces", {})[player["id"]] = [-1] * state.get("pieces_count", room_meta.get("pieces_count", 4))
-                    changed = True
-
-            if playerId not in known_ids and not any(p["id"] == playerId for p in matched_players):
-                player_meta = await redis_client.get(f"player:{playerId}:meta")
-                meta_dict = json.loads(player_meta) if player_meta else {
-                    "id": playerId,
-                    "name": playerName,
-                    "avatar": "",
-                }
-                state["players"].append(meta_dict)
-                state.setdefault("pieces", {})[playerId] = [-1] * state.get("pieces_count", 4)
-                changed = True
-
-            if room_meta.get("player_count"):
-                state["player_count"] = int(room_meta["player_count"])
-
-            if changed:
-                await GameService.save_game(room_id, state)
+        player = await _load_player_meta(playerId, playerName)
+        state = await _prepare_room(websocket, room_id, player)
+        if state is None:
+            room_manager.disconnect(room_id, playerId, websocket)
+            await websocket.close()
+            return
 
         await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
         await handle_gameplay_loop(websocket, room_id, playerId, playerName)
@@ -226,27 +232,23 @@ async def websocket_game_endpoint(
     """
     Porteghal-compatible WebSocket endpoint.
     """
-    meta_key = f"room:{room_id}:meta"
-    raw = await redis_client.get(meta_key)
+    room_meta = await RoomService.get_room(room_id)
 
-    if raw:
-        room_meta = json.loads(raw)
+    if room_meta:
         players_meta = room_meta.get("players_meta", {})
         player_meta = players_meta.get(player_num, {})
         player_id = player_meta.get("id", f"player_{player_num}")
         player_name = player_meta.get("name", f"بازیکن {player_num}")
-        room_has_meta = True
     else:
         player_id = f"player_{player_num}"
         player_name = f"بازیکن {player_num}"
         players_meta = {}
         player_meta = {"id": player_id, "name": player_name, "avatar": ""}
-        room_has_meta = False
 
     await room_manager.connect(room_id, player_id, websocket)
 
     try:
-        if room_has_meta:
+        if room_meta:
             await websocket.send_json({
                 "type": "game_info",
                 "room_id": room_id,
@@ -255,31 +257,14 @@ async def websocket_game_endpoint(
                 "coin_bet": room_meta.get("coin_bet", 0),
             })
 
-        state = await GameService.get_game(room_id)
-        if state:
-            await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
-        else:
-            pieces_count = 4
-            player_count = 2
-            if room_has_meta:
-                pieces_count = int(room_meta.get("pieces_count", 4))
-                player_count = int(room_meta.get("player_count", 2))
+        player = player_meta or {"id": player_id, "name": player_name, "avatar": ""}
+        state = await _prepare_room(websocket, room_id, player)
+        if state is None:
+            room_manager.disconnect(room_id, player_id, websocket)
+            await websocket.close()
+            return
 
-            matched_players = [
-                player for player in players_meta.values()
-                if player.get("id")
-            ]
-            if not matched_players:
-                matched_players = [player_meta]
-
-            state = await GameService.create_game(
-                room_id,
-                matched_players,
-                pieces_count=pieces_count,
-                player_count=player_count,
-            )
-            await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
-
+        await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
         await handle_gameplay_loop(websocket, room_id, player_id, player_name)
 
     except WebSocketDisconnect:

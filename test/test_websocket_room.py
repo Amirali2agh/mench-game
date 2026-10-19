@@ -4,76 +4,80 @@ Tests for the active game-room WebSocket endpoint.
 Note: this file was previously named ``test-websocket-room.py`` (hyphens), which
 pytest's default ``python_files = test_*.py`` pattern never collects. The file
 name and the mocks below were both broken, so these tests never ran.
+
+These tests run against the real service layer with an in-memory Redis fake, so
+they exercise the room bootstrap (roster -> game state) instead of mocking it.
 """
+import asyncio
+import json
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from unittest.mock import patch, AsyncMock
 
 from app.api.websocket.room import router
+from app.services import room_service as RoomService
 
 # Setup a dummy FastAPI app to test the websocket room router in isolation
 api_app = FastAPI()
 api_app.include_router(router)
 
 
-def _game_state() -> dict:
-    return {
-        "room_id": "room1",
-        "player_count": 2,
-        "pieces_count": 4,
-        "players": [{"id": "p1", "name": "Amir", "avatar": ""}],
-        "current_turn": 0,
-        "dice": None,
-        "dice_rolled": False,
-        "pieces": {"p1": [-1, -1, -1, -1]},
-        "status": "playing",
-        "winner_id": None,
-    }
+def seed_room(fake_redis, room_id="room1", players=("p1", "p2"), player_count=2):
+    """Create a room with a complete roster and return it."""
+
+    async def _seed():
+        room = RoomService.new_room(room_id, player_count=player_count)
+        await RoomService.save_room(room_id, room)
+        for index, player_id in enumerate(players):
+            player = {"id": player_id, "name": f"Player {index}", "avatar": ""}
+            await fake_redis.set(f"player:{player_id}:meta", json.dumps(player))
+            room, _seat, error = await RoomService.register_player(room_id, player)
+            assert error is None
+        return room
+
+    return asyncio.run(_seed())
 
 
-def test_websocket_room_connection_and_sync():
+def test_websocket_room_connection_and_sync(fake_redis):
     """
     Joining a room must broadcast the current game state to the new client.
     """
-    with patch("app.api.websocket.room.GameService", new_callable=AsyncMock) as mock_game, \
-         patch("app.api.websocket.room.redis_client", new_callable=AsyncMock) as mock_redis:
+    seed_room(fake_redis)
 
-        # No room metadata in Redis: the state comes from GameService.
-        mock_redis.get.return_value = None
-        mock_game.get_game.return_value = _game_state()
-
-        client = TestClient(api_app)
-        with client.websocket_connect("/ws/room/room1?playerId=p1&playerName=Amir") as websocket:
-            data = websocket.receive_json()
-            assert data["type"] == "sync_state"
-            assert data["game"]["room_id"] == "room1"
-
-        mock_game.get_game.assert_awaited()
+    client = TestClient(api_app)
+    with client.websocket_connect("/ws/room/room1?playerId=p1&playerName=Amir") as websocket:
+        data = websocket.receive_json()
+        assert data["type"] == "sync_state"
+        assert data["game"]["room_id"] == "room1"
+        assert [player["id"] for player in data["game"]["players"]] == ["p1", "p2"]
 
 
-def test_websocket_room_roll_dice_action():
+def test_websocket_room_rejects_an_unseated_player(fake_redis):
+    """A full room must not accept a third connection."""
+    seed_room(fake_redis)
+
+    client = TestClient(api_app)
+    with client.websocket_connect("/ws/room/room1?playerId=intruder&playerName=X") as websocket:
+        message = websocket.receive_json()
+        assert message["type"] == "error"
+        assert message["message"] == "Room is full"
+
+
+def test_websocket_room_roll_dice_action(fake_redis, monkeypatch):
     """
     Sending roll_dice must call GameService and broadcast the resulting state.
     """
-    with patch("app.api.websocket.room.GameService", new_callable=AsyncMock) as mock_game, \
-         patch("app.api.websocket.room.redis_client", new_callable=AsyncMock) as mock_redis:
+    seed_room(fake_redis)
+    monkeypatch.setattr("app.services.game_service.random.randint", lambda low, high: 6)
 
-        mock_redis.get.return_value = None
-        state = _game_state()
-        mock_game.get_game.return_value = state
+    client = TestClient(api_app)
+    with client.websocket_connect("/ws/room/room1?playerId=p1&playerName=Amir") as websocket:
+        # Ignore the initial sync broadcast
+        assert websocket.receive_json()["type"] == "sync_state"
 
-        rolled = {**_game_state(), "dice": 6, "dice_rolled": True}
-        mock_game.roll_dice.return_value = rolled
+        websocket.send_json({"action": "roll_dice"})
 
-        client = TestClient(api_app)
-        with client.websocket_connect("/ws/room/room1?playerId=p1&playerName=Amir") as websocket:
-            # Ignore the initial sync broadcast
-            assert websocket.receive_json()["type"] == "sync_state"
-
-            websocket.send_json({"action": "roll_dice"})
-
-            message = websocket.receive_json()
-            assert message["type"] == "sync_state"
-            assert message["game"]["dice"] == 6
-
-        mock_game.roll_dice.assert_awaited_once_with("room1", "p1")
+        message = websocket.receive_json()
+        assert message["type"] == "sync_state"
+        assert message["game"]["dice"] == 6
+        assert message["game"]["dice_rolled"] is True
