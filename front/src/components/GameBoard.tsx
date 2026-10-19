@@ -5,9 +5,19 @@ import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { GameState } from "../types";
 import { playerColors } from "../utils/colors";
 import {
-  getGridCoordinates,
+  HOME_COLUMNS,
+  SEAT_CORNERS,
+  SEAT_SIDES,
+  START_CELLS,
+  cornerForSeat,
   getArrowRotation,
+  getGridCoordinates,
+  goalCoord,
   GridCoord,
+  seatColorIndex,
+  trackOffsetForSeat,
+  type Corner,
+  type Side,
 } from "../utils/boardCoordinates";
 import Dice from "./Dice";
 import type { ChatMessage } from "../hooks/useMenschSocket";
@@ -21,6 +31,76 @@ interface GameBoardProps {
   chatMessages: ChatMessage[];
   onSendChat: (text: string) => void;
   onPassTurn: () => void;
+}
+
+/** Grid placement of the four yards, keyed by the corner the seat owns. */
+const YARD_CLASSES: Record<Corner, string> = {
+  tl: "col-start-1 col-end-5 row-start-1 row-end-5",
+  tr: "col-start-8 col-end-12 row-start-1 row-end-5",
+  bl: "col-start-1 col-end-5 row-start-8 row-end-12",
+  br: "col-start-8 col-end-12 row-start-8 row-end-12",
+};
+
+const YARD_CORNERS: Corner[] = ["tl", "tr", "bl", "br"];
+
+/** Track cell -> seat, so a cell can be painted without hard-coded coordinates. */
+const START_CELL_SEATS = new Map<string, number>(
+  START_CELLS.map((cell, seat) => [`${cell.r},${cell.c}`, seat] as const),
+);
+
+/** Home column cell -> seat. */
+const HOME_CELL_SEATS = new Map<string, number>(
+  HOME_COLUMNS.flatMap((cells, seat) =>
+    cells.map((cell) => [`${cell.r},${cell.c}`, seat] as const),
+  ),
+);
+
+/** Triangle of the center goal that leads into the home column of a seat. */
+function goalTriangleStyle(side: Side, color: string): React.CSSProperties {
+  const size = "clamp(8px,1.5vmin,18px)";
+  const base: React.CSSProperties = { position: "absolute", width: 0, height: 0 };
+  switch (side) {
+    case "top":
+      return {
+        ...base,
+        top: 0,
+        left: "50%",
+        transform: "translateX(-50%)",
+        borderLeft: `${size} solid transparent`,
+        borderRight: `${size} solid transparent`,
+        borderBottom: `${size} solid ${color}`,
+      };
+    case "bottom":
+      return {
+        ...base,
+        bottom: 0,
+        left: "50%",
+        transform: "translateX(-50%)",
+        borderLeft: `${size} solid transparent`,
+        borderRight: `${size} solid transparent`,
+        borderTop: `${size} solid ${color}`,
+      };
+    case "left":
+      return {
+        ...base,
+        left: 0,
+        top: "50%",
+        transform: "translateY(-50%)",
+        borderTop: `${size} solid transparent`,
+        borderBottom: `${size} solid transparent`,
+        borderRight: `${size} solid ${color}`,
+      };
+    case "right":
+      return {
+        ...base,
+        right: 0,
+        top: "50%",
+        transform: "translateY(-50%)",
+        borderTop: `${size} solid transparent`,
+        borderBottom: `${size} solid transparent`,
+        borderLeft: `${size} solid ${color}`,
+      };
+  }
 }
 
 const PlayerAvatar: React.FC<{ name: string; avatar?: string }> = ({
@@ -136,7 +216,11 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       const realPos = playerPieces[i] !== undefined ? playerPieces[i] : -1;
       const key = `${player.id}-${i}`;
       const visualPos = visualPositions[key] ?? realPos;
-      const coord = getGridCoordinates(vIdx, visualPos, i);
+      const coord = getGridCoordinates(
+        vIdx,
+        visualPos,
+        trackOffsetForSeat(gameState.track_offsets, vIdx),
+      );
       allRenderedPieces.push({
         playerIdx,
         vIdx,
@@ -370,26 +454,24 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     return map[vIdx] || "#999";
   };
 
-  const getPlayerPanelPosition = (
-    playerIdx: number,
-  ): "tl" | "tr" | "bl" | "br" | null => {
-    const vIdx = getVisualIdx(playerIdx);
-    const map: Record<number, "tl" | "tr" | "bl" | "br"> = {
-      2: "tl", // green → top-left
-      1: "tr", // blue → top-right
-      3: "bl", // yellow → bottom-left
-      0: "br", // red → bottom-right
-    };
-    return map[vIdx] || null;
+  const trackOffsets = gameState.track_offsets;
+  /** Canonical color seat (red/blue/green/yellow) of a seat. */
+  const colorSeatOf = (seat: number) => seatColorIndex(trackOffsets, seat);
+  const colorOfSeat = (seat: number) => getColorForVisualIdx(colorSeatOf(seat));
+
+
+  const getPlayerPanelPosition = (playerIdx: number): Corner | null => {
+    if (!players[playerIdx]) return null;
+    return cornerForSeat(gameState.track_offsets, playerIdx);
   };
 
-  const renderBaseYard = (vIdx: number) => {
-    const theme = playerColors[vIdx];
+  const renderBaseYard = (colorSeat: number) => {
+    const theme = playerColors[colorSeat];
     if (!theme) return null;
-    const ownerIdx = players.findIndex((_, i) => getVisualIdx(i) === vIdx);
+    const ownerIdx = players.findIndex((_, i) => colorSeatOf(i) === colorSeat);
     const isOwned = ownerIdx !== -1;
     const isPlayerActive = isOwned && current_turn === ownerIdx;
-    const color = getColorForVisualIdx(vIdx);
+    const color = getColorForVisualIdx(colorSeat);
 
     return (
       <div
@@ -446,8 +528,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     const pos = getPlayerPanelPosition(playerIdx);
     if (!pos || !players[playerIdx]) return null;
     const p = players[playerIdx];
-    const vIdx = getVisualIdx(playerIdx);
-    const color = getColorForVisualIdx(vIdx);
+    const color = colorOfSeat(playerIdx);
     const isTurn = current_turn === playerIdx;
 
     return (
@@ -522,10 +603,14 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     );
   };
 
-  const tlPlayer = players.findIndex((_, i) => getVisualIdx(i) === 2);
-  const trPlayer = players.findIndex((_, i) => getVisualIdx(i) === 1);
-  const blPlayer = players.findIndex((_, i) => getVisualIdx(i) === 3);
-  const brPlayer = players.findIndex((_, i) => getVisualIdx(i) === 0);
+  const playerAtCorner = (corner: Corner) =>
+    players.findIndex(
+      (_, seat) => cornerForSeat(gameState.track_offsets, seat) === corner,
+    );
+  const tlPlayer = playerAtCorner("tl");
+  const trPlayer = playerAtCorner("tr");
+  const blPlayer = playerAtCorner("bl");
+  const brPlayer = playerAtCorner("br");
 
   return (
     <div className="h-screen w-screen flex flex-col bg-[#F9F6F0] font-sans overflow-hidden select-none">
@@ -592,22 +677,24 @@ export const GameBoard: React.FC<GameBoardProps> = ({
             <div className="relative w-full h-full">
               <div className="grid grid-cols-11 grid-rows-11 gap-[0.35vmin] w-full h-full relative">
                 {/* Yards */}
-                <div className="col-start-1 col-end-5 row-start-1 row-end-5 p-[0.3vmin]">
-                  {renderBaseYard(2)}
-                </div>{" "}
-                {/* TL: green */}
-                <div className="col-start-8 col-end-12 row-start-1 row-end-5 p-[0.3vmin]">
-                  {renderBaseYard(1)}
-                </div>{" "}
-                {/* TR: blue */}
-                <div className="col-start-1 col-end-5 row-start-8 row-end-12 p-[0.3vmin]">
-                  {renderBaseYard(3)}
-                </div>{" "}
-                {/* BL: red */}
-                <div className="col-start-8 col-end-12 row-start-8 row-end-12 p-[0.3vmin]">
-                  {renderBaseYard(0)}
-                </div>{" "}
-                {/* BR: green */}
+                {YARD_CORNERS.map((corner) => {
+                  const ownerSeat = players.findIndex(
+                    (_, seat) =>
+                      cornerForSeat(gameState.track_offsets, seat) === corner,
+                  );
+                  // Empty seats keep a dimmed yard in their canonical color.
+                  const yardSeat =
+                    ownerSeat >= 0 ? ownerSeat : SEAT_CORNERS.indexOf(corner);
+                  return (
+                    <div
+                      key={`yard-${corner}`}
+                      className={`${YARD_CLASSES[corner]} p-[0.3vmin]`}
+                    >
+                      {renderBaseYard(yardSeat)}
+                    </div>
+                  );
+                })}
+                {/* Unused corners are dimmed by renderBaseYard itself. */}
                 <div className="absolute inset-0 bg-white/30 rounded-xl pointer-events-none -z-10" />
                 {/* Grid cells */}
                 {Array.from({ length: 11 }).map((_, rIdx) => {
@@ -617,47 +704,39 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                     if (rIdx >= 7 && cIdx < 4) return null;
                     if (rIdx >= 7 && cIdx >= 7) return null;
 
-                    if (rIdx === 5 && cIdx === 5) {
+                    if (rIdx === goalCoord.r && cIdx === goalCoord.c) {
                       return (
                         <div
                           key={`cell-${rIdx}-${cIdx}`}
                           className="col-start-6 col-end-7 row-start-6 row-end-7 flex items-center justify-center relative"
                         >
                           <div className="w-full h-full rounded-lg overflow-hidden relative">
-                            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[clamp(8px,1.5vmin,18px)] border-r-[clamp(8px,1.5vmin,18px)] border-b-[clamp(8px,1.5vmin,18px)] border-l-transparent border-r-transparent border-b-[#277DA1]/40" />
-                            <div className="absolute right-0 top-1/2 -translate-y-1/2 w-0 h-0 border-t-[clamp(8px,1.5vmin,18px)] border-b-[clamp(8px,1.5vmin,18px)] border-l-[clamp(8px,1.5vmin,18px)] border-t-transparent border-b-transparent border-l-[#43AA8B]/40" />
-                            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[clamp(8px,1.5vmin,18px)] border-r-[clamp(8px,1.5vmin,18px)] border-t-[clamp(8px,1.5vmin,18px)] border-l-transparent border-r-transparent border-t-[#F94144]/40" />
-                            <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0 h-0 border-t-[clamp(8px,1.5vmin,18px)] border-b-[clamp(8px,1.5vmin,18px)] border-r-[clamp(8px,1.5vmin,18px)] border-t-transparent border-b-transparent border-r-[#F9C74F]/40" />
+                            {SEAT_SIDES.map((side, seat) => (
+                              <div
+                                key={`goal-${side}`}
+                                style={goalTriangleStyle(
+                                  side,
+                                  `${getColorForVisualIdx(seat)}66`,
+                                )}
+                              />
+                            ))}
                             <div className="absolute inset-[25%] rounded-full bg-[#E8D3B0]/50 border border-[#D4C4A0]" />
                           </div>
                         </div>
                       );
                     }
 
-                    let customBg = "bg-white";
-                    let isHomeStretch = false;
-
-                    if (cIdx === 5 && rIdx >= 1 && rIdx <= 4) {
-                      customBg = "bg-[#43AA8B]/30";
-                      isHomeStretch = true;
-                    } else if (rIdx === 5 && cIdx >= 6 && cIdx <= 9) {
-                      customBg = "bg-[#277DA1]/30";
-                      isHomeStretch = true;
-                    } else if (rIdx === 5 && cIdx >= 1 && cIdx <= 4) {
-                      customBg = "bg-[#F9C74F]/30";
-                      isHomeStretch = true;
-                    } else if (cIdx === 5 && rIdx >= 6 && rIdx <= 9) {
-                      customBg = "bg-[#F94144]/30";
-                      isHomeStretch = true;
-                    }
-
-                    if (rIdx === 0 && cIdx === 4) customBg = "bg-[#43AA8B]";
-                    else if (rIdx === 4 && cIdx === 10)
-                      customBg = "bg-[#277DA1]";
-                    else if (rIdx === 6 && cIdx === 0)
-                      customBg = "bg-[#F9C74F]";
-                    else if (rIdx === 10 && cIdx === 6)
-                      customBg = "bg-[#F94144]";
+                    const cellKey = `${rIdx},${cIdx}`;
+                    const startSeat = START_CELL_SEATS.get(cellKey);
+                    const homeSeat = HOME_CELL_SEATS.get(cellKey);
+                    const isPlainCell =
+                      startSeat === undefined && homeSeat === undefined;
+                    const cellBackground =
+                      startSeat !== undefined
+                        ? getColorForVisualIdx(startSeat)
+                        : homeSeat !== undefined
+                          ? `${getColorForVisualIdx(homeSeat)}4D`
+                          : undefined;
 
                     const arrowRotation = getArrowRotation({
                       r: rIdx,
@@ -670,18 +749,17 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                         style={{
                           gridRowStart: rIdx + 1,
                           gridColumnStart: cIdx + 1,
+                          backgroundColor: cellBackground,
                         }}
                         className={`rounded-full border ${
-                          customBg === "bg-white"
+                          isPlainCell
                             ? "border-[#D4C4A0]/60 shadow-[0_1px_2px_rgba(0,0,0,0.08)]"
-                            : isHomeStretch
+                            : homeSeat !== undefined
                               ? "border-transparent"
                               : "border-white/40 shadow-inner"
-                        } flex items-center justify-center relative transition-all duration-300 ${customBg} aspect-square p-[0.15vmin]`}
+                        } flex items-center justify-center relative transition-all duration-300 aspect-square p-[0.15vmin]`}
                       >
-                        {!isHomeStretch &&
-                          !customBg.startsWith("bg-[") &&
-                          customBg === "bg-white" ? (
+                        {isPlainCell ? (
                           <svg
                             className={`w-2/5 h-2/5 text-[#C4B89A]/60 ${arrowRotation}`}
                             fill="currentColor"
@@ -707,7 +785,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                     {allRenderedPieces
                       .filter((p) => p.visualPos >= 0)
                       .map(({ vIdx, playerId: pId, pieceIdx, coord }) => {
-                        const theme = playerColors[vIdx];
+                        const theme = playerColors[colorSeatOf(vIdx)];
                         if (!theme) return null;
                         const isMovable =
                           pId === localPlayerId && isPieceMovable(pieceIdx);
@@ -729,7 +807,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                               5
                             : 0;
 
-                        const color = getColorForVisualIdx(vIdx);
+                        const color = colorOfSeat(vIdx);
 
                         return (
                           <div
