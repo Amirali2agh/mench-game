@@ -169,6 +169,18 @@ so the two players start exactly 20 cells apart on facing corners.
 For 4 Players: seat 0 = index 20, seat 1 = index 30, seat 2 = index 0, seat 3 = index 10.
 The resolved per-seat values are always sent as `track_offsets` in `sync_state`,
 so clients never re-implement this table.
+
+Client mapping:
+front/src/utils/boardCoordinates.ts is the single source of truth on the client.
+It holds the same `CORNER_OFFSETS` table plus the 40-cell track (`circularTrack`),
+the derived `START_CELLS`, `HOME_COLUMNS`, and the yard corner (`SEAT_CORNERS`) and
+home side (`SEAT_SIDES`) per seat. Start cells, home columns, yards, player panels
+and the center goal are all derived from a seat's track offset, so a two-player
+match puts the second player on the facing corner with that corner's own color
+(green opposite red) instead of recoloring a neighbouring corner. `npm test` runs
+boardCoordinates.test.ts, which asserts these invariants (including that the home
+column of every seat starts next to the last track cell of that seat) and fails if
+the client table drifts from app/services/board_layout.py.
 6. Disconnect Forfeit System (The 60-Second Rule)
 If any player disconnects (due to network failure, app closing, etc.), the server arms an asynchronous 60-second forfeit timer for that player.
 Reconnection: If the player connects back to ws://localhost:8000/ws/room/{room_id} before the 60 seconds expire, the forfeit timer is canceled, and they resume playing.
