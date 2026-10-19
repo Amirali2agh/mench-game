@@ -121,7 +121,7 @@ The backend reads environment variables (and `.env`) through
 | `MATCHMAKING_TIMEOUT` | `30` | Seconds to wait for a match / for a room roster to fill |
 | `PORTEGHAL_API_URL` | `http://localhost:8090` | Porteghal base URL for winner reporting |
 | `PORTEGHAL_API_KEY` | empty | Porteghal internal API key. Required for payouts; when empty the service logs an error and skips the call instead of using a fallback |
-| `ALLOWED_CORS_ORIGINS` | `*` | Comma-separated origin allowlist |
+| `ALLOWED_CORS_ORIGINS` | empty | Comma-separated browser origin allowlist. Empty means same-origin only (the proxy setup); `*` is refused unless `DEBUG=true` |
 
 Never commit a real `PORTEGHAL_API_KEY`. It is read from the environment only.
 

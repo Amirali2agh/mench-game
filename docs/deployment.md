@@ -136,7 +136,8 @@ WebSocket upgrades need no extra configuration in Caddy; nginx needs
 - [ ] `DEBUG=false` (the `/api/dev` cheat endpoints must answer 404).
 - [ ] `PORTEGHAL_API_KEY` is set in the environment; the service logs an error
       and skips payouts when it is missing.
-- [ ] `ALLOWED_CORS_ORIGINS` lists the real origin instead of `*`.
+- [ ] `ALLOWED_CORS_ORIGINS` is empty (same-origin proxy) or lists the real
+      frontend origin; `*` is refused unless `DEBUG=true`.
 - [ ] The frontend was built with the intended `VITE_API_BASE_URL` and
       `VITE_WS_BASE_URL` (both empty when the proxy serves `/api` and `/ws`),
       and `VITE_ALLOWED_HOSTS` is only used for development.
