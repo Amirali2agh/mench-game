@@ -11,7 +11,7 @@ are limited to those expressly granted below.
 1. DEFINITIONS
 
    "Licensor"      AmirAli Ghasemi, operating as binux.tech
-                   <address>, contact: licensing@binux.tech
+                   contact: licensing@binux.tech
    "Licensee"      the individual or legal entity that paid for a License.
    "Software"      the source code, build artifacts and documentation in this
                    repository, excluding third-party components.
@@ -37,6 +37,11 @@ are limited to those expressly granted below.
    Licensee are covered; separate legal entities are not. One (1) License
    covers an unlimited number of Products and deployments operated by the
    Licensee.
+
+   The Software is published in a public repository for reference and
+   evaluation. Public availability does not itself grant any right to use the
+   Software commercially; such rights are granted only by this License or by a
+   separate written agreement with the Licensor.
 
 3. ATTRIBUTION (MANDATORY)
 
@@ -111,8 +116,10 @@ are limited to those expressly granted below.
 
 10. GOVERNING LAW
 
-    This License is governed by the laws of <jurisdiction>, and disputes are
-    subject to the exclusive jurisdiction of the courts of <city>.
+    This License is governed by the laws of the Licensor's country of
+    residence as stated in the commercial agreement signed with the Licensee.
+    Absent such an agreement, disputes are subject to the exclusive
+    jurisdiction of the competent courts at the Licensor's place of business.
 
 11. CONTACT
 
