@@ -2,13 +2,15 @@ import json
 import random
 import asyncio
 from app.redis_client import redis_client
+from app.services.board_layout import (
+    TRACK_LENGTH,
+    track_offsets,
+    track_offsets_for_state,
+)
 from app.utils.redis_keys import RedisKeys
 
 HOME_START_POSITION = 40
 HOME_END_POSITION = 43
-# Relative positions are rendered from each player's colored starting cell.
-# This matches the visual board order: red, blue, green, yellow.
-TRACK_OFFSETS = (20, 30, 0, 10)
 
 class GameService:
     """
@@ -31,13 +33,18 @@ class GameService:
         Unlike create_game which accepts a flexible list, this ensures exactly 2 players.
         """
         players = [player1_meta, player2_meta]
-        state = await GameService.create_game(room_id, players, pieces_count, player_count)
-        state["coin_bet"] = coin_bet
-        await GameService.save_game(room_id, state)
-        return state
+        return await GameService.create_game(
+            room_id, players, pieces_count, player_count, coin_bet
+        )
 
     @staticmethod
-    async def create_game(room_id: str, players: list[dict], pieces_count: int = 4, player_count: int | None = None) -> dict:
+    async def create_game(
+        room_id: str,
+        players: list[dict],
+        pieces_count: int = 4,
+        player_count: int | None = None,
+        coin_bet: int = 0,
+    ) -> dict:
         if player_count is None:
             player_count = len(players)
 
@@ -56,7 +63,11 @@ class GameService:
             "pieces": pieces,
             "status": "playing",
             "winner_id": None,
-            "last_roll": None
+            "last_roll": None,
+            "coin_bet": coin_bet,
+            # Seat -> absolute track offset, so clients never re-implement the
+            # seat plan shared by both player counts.
+            "track_offsets": list(track_offsets(player_count)),
         }
 
         await GameService.save_game(room_id, state)
@@ -79,7 +90,7 @@ class GameService:
         if not state or state["status"] == "finished":
             raise ValueError("Game not active")
 
-        active_player_idx = state["current_turn"]
+        active_player_idx = GameService._current_player_index(state)
         active_player = state["players"][active_player_idx]
 
         if active_player["id"] != player_id:
@@ -167,7 +178,7 @@ class GameService:
         if not state or state["status"] == "finished":
             raise ValueError("Game not active")
 
-        active_player_idx = state["current_turn"]
+        active_player_idx = GameService._current_player_index(state)
         active_player = state["players"][active_player_idx]
 
         if active_player["id"] != player_id:
@@ -254,9 +265,9 @@ class GameService:
         players = state["players"]
         player_ids = [p["id"] for p in players]
 
+        seat_offsets = track_offsets_for_state(state)
         moving_idx = player_ids.index(moving_player_id)
-        moving_offset = TRACK_OFFSETS[moving_idx]
-        moving_abs = (moving_offset + relative_pos) % 40
+        moving_abs = (seat_offsets[moving_idx % len(seat_offsets)] + relative_pos) % TRACK_LENGTH
         
         captured_any = False
 
@@ -264,12 +275,11 @@ class GameService:
             if pid == moving_player_id:
                 continue
 
-            opponent_offset = TRACK_OFFSETS[idx]
             opponent_pieces = state["pieces"][pid]
 
             for piece_idx, opp_rel_pos in enumerate(opponent_pieces):
                 if 0 <= opp_rel_pos <= 39:
-                    opp_abs = (opponent_offset + opp_rel_pos) % 40
+                    opp_abs = (seat_offsets[idx % len(seat_offsets)] + opp_rel_pos) % TRACK_LENGTH
                     if moving_abs == opp_abs:
                         opponent_pieces[piece_idx] = -1
                         captured_any = True
@@ -277,18 +287,52 @@ class GameService:
         return captured_any
 
     @staticmethod
+    def _current_player_index(state: dict) -> int:
+        """
+        Return the index of the active seat, clamping a stale ``current_turn``.
+
+        The roster can shrink (a player is removed) or a state can be restored
+        with an out-of-range turn, so every seat lookup goes through here
+        instead of indexing ``state["players"]`` directly.
+        """
+        players = state.get("players") or []
+        if not players:
+            raise ValueError("Game has no players")
+
+        current = state.get("current_turn", 0)
+        if not isinstance(current, int) or not 0 <= current < len(players):
+            current = 0
+            state["current_turn"] = current
+        return current
+
+    @staticmethod
     def _rotate_turn(state: dict) -> dict:
-        joined_count = len(state["players"])
-        if joined_count > 0:
+        """
+        Advance the turn and reset the per-turn dice state.
+
+        Rotation is driven by the *actual* roster length, never by the
+        configured ``player_count``: the four-player non-diagonal seat order
+        only applies while all four seats are occupied.
+        """
+        joined_count = len(state.get("players") or [])
+        current_idx = state.get("current_turn", 0)
+
+        if not isinstance(current_idx, int) or not 0 <= current_idx < joined_count:
+            # Player removed or roster restored out of range: land on seat 0
+            # instead of raising ValueError from turn_order.index().
+            state["current_turn"] = 0
+        elif joined_count:
             if state.get("player_count") == 4:
-                turn_order = [0, 3, 1, 2]
-                current_idx = state["current_turn"]
-                state["current_turn"] = turn_order[
-                    (turn_order.index(current_idx) + 1) % len(turn_order)
-                ]
+                turn_order = [seat for seat in (0, 3, 1, 2) if seat < joined_count]
             else:
-                state["current_turn"] = (state["current_turn"] + 1) % joined_count
-        
+                turn_order = list(range(joined_count))
+            state["current_turn"] = turn_order[
+                (turn_order.index(current_idx) + 1) % len(turn_order)
+            ]
+
+        # Issue #13: the previous player's roll must never leak into this turn.
+        # ``last_roll`` is intentionally kept: clients replay it as history.
+        state["dice"] = None
         state["dice_rolled"] = False
         state["consecutive_sixes"] = 0
         return state
