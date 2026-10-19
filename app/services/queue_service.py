@@ -40,9 +40,6 @@ class QueueService:
                 room_id = str(uuid.uuid4())
                 players_with_meta = []
 
-                await redis_client.set(f"room:{room_id}:pieces_count", pieces_count, ex=3600)
-                await redis_client.set(f"room:{room_id}:player_count", target_players, ex=3600)
-
                 players_meta = {}
                 for index, pid in enumerate(matched_ids, start=1):
                     await redis_client.set(RedisKeys.player_room(pid), room_id, ex=7200)
@@ -64,6 +61,20 @@ class QueueService:
                     }),
                     ex=7200,
                 )
+
+                # Every matched player gets a notification: they may be
+                # connected to a different worker than the one that completed
+                # the match, so the WebSocket watcher reads it from here.
+                for matched_id in matched_ids:
+                    notification_key = RedisKeys.queue_notifications(matched_id)
+                    await redis_client.rpush(
+                        notification_key,
+                        json.dumps({
+                            "room_id": room_id,
+                            "pieces_count": pieces_count,
+                        }),
+                    )
+                    await redis_client.expire(notification_key, 300)
 
                 return {
                     "room_id": room_id,

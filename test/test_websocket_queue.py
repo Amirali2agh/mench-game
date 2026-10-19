@@ -49,6 +49,7 @@ def test_websocket_queue_flow():
             "p1",
             "test-room-uuid",
             mock_service.add_to_queue.return_value["players"],
+            3,
         )
         mock_service.remove_from_queue.assert_called_once_with("p1", 2, 3)
         assert "p1" not in queue_manager.active_connections
@@ -62,16 +63,18 @@ async def test_wait_for_match_reads_room_metadata_from_redis():
         "players_meta": {
             "1": player,
             "2": {"id": "p2", "name": "Ali", "avatar": ""},
-        }
+        },
+        "pieces_count": 3,
+    }
+    stored = {
+        "player:p1:room": "room-123",
+        "room:room-123:meta": json.dumps(room_meta),
     }
 
     with patch("app.api.websocket.queue.redis_client", new_callable=AsyncMock) as mock_redis:
-        mock_redis.get.side_effect = [
-            "room-123",
-            json.dumps(room_meta),
-        ]
+        mock_redis.get.side_effect = lambda key: stored.get(key)
 
-        await _wait_for_match(websocket, "p1")
+        await _wait_for_match(websocket, "p1", 2, 4)
 
     websocket.send_json.assert_awaited_once_with({
         "type": "match_found",
@@ -80,4 +83,5 @@ async def test_wait_for_match_reads_room_metadata_from_redis():
             {"id": "p1", "name": "Amir", "avatar": ""},
             {"id": "p2", "name": "Ali", "avatar": ""},
         ],
+        "pieces_count": 3,
     })

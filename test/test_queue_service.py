@@ -61,7 +61,20 @@ async def test_add_to_queue_triggers_match():
         assert result["pieces_count"] == 2
         
         room_id = result["room_id"]
-        mock_redis.set.assert_any_call(f"room:{room_id}:pieces_count", 2, ex=3600)
+
+        # Settings live in the room document only: no legacy side keys.
+        written_keys = [
+            call.args[0] for call in mock_redis.set.call_args_list if call.args
+        ]
+        assert f"room:{room_id}:pieces_count" not in written_keys
+        assert f"room:{room_id}:player_count" not in written_keys
+
+        # Both players get a match notification for the per-worker watcher.
+        notified = [
+            call.args[0] for call in mock_redis.rpush.call_args_list if call.args
+        ]
+        assert "queue:notify:p1" in notified
+        assert "queue:notify:p2" in notified
 
 
 @pytest.mark.asyncio
@@ -96,6 +109,9 @@ async def test_add_to_queue_persists_complete_room_roster():
         assert room_meta["players_meta"]["2"]["name"] == "Ali"
         assert room_meta["player_count"] == 2
         assert room_meta["pieces_count"] == 4
+        assert f"room:{room_id}:pieces_count" not in {
+            call.args[0] for call in mock_redis.set.call_args_list if call.args
+        }
 
 
 @pytest.mark.asyncio
