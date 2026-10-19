@@ -1,0 +1,28 @@
+.git
+.gitignore
+.github
+.hermes
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Frontend sources and the vendored dependency tree are not needed to build the
+# backend image; they only inflate the build context.
+front/node_modules
+front/dist
+front/.vite
+
+test
+docs
+*.md
+!README.md
+
+.env
+.env.*
+*.Zone.Identifier
