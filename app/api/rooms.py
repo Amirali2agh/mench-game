@@ -1,24 +1,42 @@
 import json
 import uuid
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from app.redis_client import redis_client
 from app.services import room_service as RoomService
 
 router = APIRouter(prefix="/api")
 
+#: Player identifiers end up in Redis keys and URLs, so they stay conservative.
+#: Room identifiers are even stricter because they are also part of the URL path.
+PLAYER_ID_PATTERN = r"^[A-Za-z0-9_.-]{1,64}$"
+ROOM_ID_PATTERN = r"^$|^[A-Za-z0-9_-]{1,64}$"
+
+#: Board sizes the engine supports: a two- or four-seat board with 2-4 pieces.
+PlayerCount = Literal[2, 4]
+PiecesCount = Literal[2, 3, 4]
+
 
 class CreateRoomRequest(BaseModel):
-    room_id: str = ""
-    player1_id: str = ""
-    player1_name: str = ""
-    player1_avatar: str = ""
-    player2_id: str = ""
-    player2_name: str = ""
-    player2_avatar: str = ""
-    player_count: int = 2
-    pieces_count: int = 4
-    coin_bet: int = 0
+    """Room settings sent by Porteghal when it opens a match directly."""
+
+    room_id: str = Field(default="", max_length=64, pattern=ROOM_ID_PATTERN)
+    player1_id: str = Field(..., pattern=PLAYER_ID_PATTERN)
+    player1_name: str = Field(default="", max_length=64)
+    player1_avatar: str = Field(default="", max_length=512)
+    player2_id: str = Field(default="", pattern=r"^$|" + PLAYER_ID_PATTERN)
+    player2_name: str = Field(default="", max_length=64)
+    player2_avatar: str = Field(default="", max_length=512)
+    player_count: PlayerCount = 2
+    pieces_count: PiecesCount = 4
+    coin_bet: int = Field(default=0, ge=0)
+
+    @field_validator("player1_name", "player2_name", "player1_avatar", "player2_avatar")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        return value.strip()
 
 
 class RoomJoinResponse(BaseModel):
@@ -34,9 +52,14 @@ class RoomJoinResponse(BaseModel):
 
 
 class JoinRoomRequest(BaseModel):
-    player_id: str
-    player_name: str = ""
-    player_avatar: str = ""
+    player_id: str = Field(..., pattern=PLAYER_ID_PATTERN)
+    player_name: str = Field(default="", max_length=64)
+    player_avatar: str = Field(default="", max_length=512)
+
+    @field_validator("player_name", "player_avatar")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        return value.strip()
 
 
 def _player_meta(player_id: str, name: str, avatar: str) -> dict:
