@@ -36,8 +36,7 @@ USER app
 # Expose the port FastAPI runs on
 EXPOSE 8000
 
-# /health answers 503 while Redis is unreachable, so the container reports
-# itself unhealthy exactly when it cannot serve game actions.
+# Liveness probe: the container is unhealthy whenever the API stops answering.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
 

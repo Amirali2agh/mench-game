@@ -49,7 +49,7 @@ def _dockerfile_instructions() -> list[str]:
 
 def test_runtime_requirements_are_exactly_pinned():
     for requirement in _requirements_lines(ROOT / "requirements.txt"):
-        assert requirement.startswith("-r ") is False, requirement
+        assert not requirement.startswith("-r "), requirement
         assert PINNED.match(requirement), f"unpinned runtime dependency: {requirement}"
 
 
@@ -87,10 +87,12 @@ def test_dockerfile_runs_as_a_non_root_user():
 
 
 def test_dockerfile_has_a_healthcheck():
-    instructions = _dockerfile_instructions()
+    healthchecks = [
+        line for line in _dockerfile_instructions() if line.upper().startswith("HEALTHCHECK")
+    ]
 
-    assert any(line.upper().startswith("HEALTHCHECK") for line in instructions)
-    assert "/health" in " ".join(line for line in instructions if line.upper().startswith("HEALTHCHECK"))
+    assert healthchecks, "the image must declare a HEALTHCHECK"
+    assert "/health" in healthchecks[-1]
 
 
 def test_package_index_is_opt_in_instead_of_hard_coded():
@@ -98,9 +100,7 @@ def test_package_index_is_opt_in_instead_of_hard_coded():
     instructions = _dockerfile_instructions()
 
     assert any(line.startswith("ARG PIP_INDEX_URL") for line in instructions)
-    pip_install = next(
-        line for line in instructions if line.startswith("pip install") or "pip install" in line
-    )
+    pip_install = next(line for line in instructions if "pip install" in line)
     assert '"${PIP_INDEX_URL}"' in pip_install
 
 
