@@ -1,9 +1,8 @@
 /**
  * Root application component.
- * Integrates theme management with game state routing (Lobby, Queue, Board).
+ * Routes between lobby, queue and board, and hosts the global overlays.
  * Supports direct room mode for porteghal-app WebView integration.
  */
-import { useEffect, useState } from 'react';
 import { useMenschSocket } from './hooks/useMenschSocket';
 import { LobbyScreen } from './components/LobbyScreen';
 import { QueueScreen } from './components/QueueScreen';
@@ -12,17 +11,11 @@ import { DevControl } from './components/DevControl';
 import { DisconnectOverlay } from './components/DisconnectOverlay';
 import { GameOverModal } from './components/GameOverModal';
 import { OwnConnectionOverlay } from './components/OwnConnectionOverlay';
-import { applyTheme, ThemeMode } from './utils/theme';
 import { getQueryParams } from './utils/bridge';
 
 export function App() {
-  const [theme, _setTheme] = useState<ThemeMode>('dark');
   const queryParams = getQueryParams();
   const isDirectMode = !!queryParams.roomId;
-
-  useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
 
   const {
     playerId,

@@ -131,6 +131,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
 }) => {
   const [isSpinning, setIsSpinning] = useState(false);
   const [chatInput, setChatInput] = useState("");
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const lastRollSignatureRef = useRef<string | null>(null);
   const [visibleRoll, setVisibleRoll] = useState<{
@@ -500,10 +501,21 @@ export const GameBoard: React.FC<GameBoardProps> = ({
               >
                 {slotTaken && (
                   <div
+                    role="button"
+                    tabIndex={isMovablePiece ? 0 : -1}
+                    aria-disabled={!isMovablePiece}
+                    aria-label={`مهره ${idx + 1} در پایه`}
                     onClick={() => isMovablePiece && onMovePiece(idx)}
+                    onKeyDown={(event) => {
+                      if (!isMovablePiece) return;
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onMovePiece(idx);
+                      }
+                    }}
                     className={`w-[80%] h-[80%] rounded-full bg-white shadow-[0_3px_8px_rgba(0,0,0,0.25)] flex items-center justify-center relative ${
                       isMovablePiece
-                        ? "cursor-pointer animate-bounce ring-2 ring-amber-400 ring-offset-1 ring-offset-transparent z-30 scale-105"
+                        ? "cursor-pointer animate-bounce ring-2 ring-amber-400 ring-offset-1 ring-offset-transparent z-30 scale-105 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white"
                         : ""
                     }`}
                   >
@@ -613,12 +625,14 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   const brPlayer = playerAtCorner("br");
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#F9F6F0] font-sans overflow-hidden select-none">
+    <div className="min-h-screen w-full flex flex-col bg-[#F9F6F0] font-sans">
       {/* ═══ TOP HEADER ═══ */}
       <header className="flex items-center justify-between px-4 pt-3 pb-1">
         <button
-          onClick={onLeave}
-          className="w-[44px] h-[44px] bg-white rounded-full shadow-[0_4px_10px_rgba(0,0,0,0.05)] flex items-center justify-center active:scale-90 transition-transform"
+          type="button"
+          onClick={() => setLeaveConfirmOpen(true)}
+          aria-label="خروج از بازی"
+          className="w-[44px] h-[44px] bg-white rounded-full shadow-[0_4px_10px_rgba(0,0,0,0.05)] flex items-center justify-center active:scale-90 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
         >
           <svg
             width="20"
@@ -642,21 +656,12 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           </span>
         </div>
 
-        <div className="w-[44px] h-[44px] bg-white rounded-full shadow-[0_4px_10px_rgba(0,0,0,0.05)] flex items-center justify-center">
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="#D4A373"
-            stroke="none"
-          >
-            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-          </svg>
-        </div>
+        {/* Keeps the title centred; the old star looked like a button but did nothing. */}
+        <div aria-hidden="true" className="w-[44px] h-[44px]" />
       </header>
 
       {/* ═══ MAIN AREA: Player panels + Board + Dice ═══ */}
-      <main className="flex-1 flex flex-col overflow-hidden px-2">
+      <main className="flex-1 flex flex-col px-2">
         {/* Top players row */}
         <div className="grid grid-cols-2 items-start w-full max-w-[480px] mx-auto px-1 pt-1 pb-1 min-h-[52px]">
           <div className="flex justify-start">
@@ -812,6 +817,17 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                         return (
                           <div
                             key={`piece-${pId}-${pieceIdx}`}
+                            role="button"
+                            tabIndex={isMovable ? 0 : -1}
+                            aria-disabled={!isMovable}
+                            aria-label={`مهره ${pieceIdx + 1}`}
+                            onKeyDown={(event) => {
+                              if (!isMovable) return;
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                onMovePiece(pieceIdx);
+                              }
+                            }}
                             style={{
                               position: "absolute",
                               left: `${coord.c * cellPitch + (cellPitch - pieceSize) / 2 + overlapOffset}px`,
@@ -825,7 +841,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                             onClick={() => isMovable && onMovePiece(pieceIdx)}
                             className={`rounded-full bg-white shadow-[0_3px_8px_rgba(0,0,0,0.25)] flex items-center justify-center ${
                               isMovable
-                                ? "cursor-pointer animate-bounce ring-2 ring-amber-400 ring-offset-2 z-30 scale-105"
+                                ? "cursor-pointer animate-bounce ring-2 ring-amber-400 ring-offset-2 z-30 scale-105 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white"
                                 : ""
                             }`}
                           >
@@ -857,16 +873,17 @@ export const GameBoard: React.FC<GameBoardProps> = ({
               )}
               {isMyTurn ? (
                 <button
+                  type="button"
                   onClick={handleDiceClick}
                   disabled={!isMyTurn || isSpinning || gameState.dice_rolled}
-                  aria-label="Roll dice"
-                  className={`relative min-w-[104px] h-[48px] px-6 rounded-full bg-[#C17D3C] text-white font-bold text-[15px] shadow-[0_8px_18px_rgba(193,125,60,0.28)] border-2 border-[#D99A5C] flex items-center justify-center ${
+                  aria-label="پرتاب تاس"
+                  className={`relative min-w-[136px] h-[48px] px-6 rounded-full bg-[#C17D3C] text-white font-bold text-[15px] shadow-[0_8px_18px_rgba(193,125,60,0.28)] border-2 border-[#D99A5C] flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600 focus-visible:ring-offset-2 ${
                     isMyTurn && !gameState.dice_rolled && !isSpinning
                       ? "hover:bg-[#AE6C31] active:scale-95 transition-transform cursor-pointer"
                       : "opacity-60 cursor-not-allowed"
                   }`}
                 >
-                  {isSpinning ? "Rolling..." : "Roll"}
+                  {isSpinning ? "در حال پرتاب..." : "پرتاب تاس"}
                 </button>
               ) : (
                 <div className="w-[56px] h-[56px]" />
@@ -883,7 +900,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       {/* ═══ CHAT BAR ═══ */}
       <footer className="px-3 pb-[clamp(4px,1vh,8px)] pt-1">
         {chatMessages.length > 0 && (
-          <div className="mx-1 mb-1 max-h-[clamp(60px,8vh,100px)] overflow-y-auto rounded-xl bg-white/80 backdrop-blur-sm shadow-[0_2px_8px_rgba(0,0,0,0.04)] px-3 py-2 space-y-1 scrollbar-thin">
+          <div className="mx-1 mb-1 max-h-[clamp(60px,8vh,100px)] overflow-y-auto overscroll-contain rounded-xl bg-white/80 backdrop-blur-sm shadow-[0_2px_8px_rgba(0,0,0,0.04)] px-3 py-2 space-y-1">
             {chatMessages.map((msg, i) => (
               <div
                 key={i}
@@ -903,22 +920,6 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           </div>
         )}
         <div className="flex items-center gap-2 bg-white rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.05)] px-4 py-[10px] mx-1">
-          <button className="flex-shrink-0">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#5C5C5C"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-              <line x1="9" y1="9" x2="9.01" y2="9" />
-              <line x1="15" y1="9" x2="15.01" y2="9" />
-            </svg>
-          </button>
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -932,6 +933,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           >
             <input
               type="text"
+              maxLength={200}
+              aria-label="متن پیام"
               placeholder="پیام خود را بنویسید..."
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
@@ -940,7 +943,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
             <button
               type="submit"
               disabled={!chatInput.trim()}
-              className="flex-shrink-0 disabled:opacity-30 transition-opacity"
+              aria-label="ارسال پیام"
+              className="flex-shrink-0 disabled:opacity-30 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 rounded"
             >
               <svg
                 width="20"
@@ -959,6 +963,43 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           </form>
         </div>
       </footer>
+
+      {leaveConfirmOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="leave-confirm-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 animate-fade-in"
+        >
+          <div className="w-full max-w-xs rounded-3xl bg-white p-6 text-center shadow-2xl">
+            <h2
+              id="leave-confirm-title"
+              className="mb-2 text-lg font-bold text-[#2C2C2C]"
+            >
+              خروج از بازی؟
+            </h2>
+            <p className="mb-6 text-sm leading-relaxed text-slate-600">
+              بازی در جریان است و با خروج شما به پایان می‌رسد.
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setLeaveConfirmOpen(false)}
+                className="flex-1 rounded-xl bg-slate-100 py-3 text-sm font-bold text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={onLeave}
+                className="flex-1 rounded-xl bg-rose-500 py-3 text-sm font-bold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
+              >
+                خروج
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

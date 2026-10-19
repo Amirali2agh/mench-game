@@ -31,6 +31,9 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+/** Newest messages kept in memory; older chat is dropped. */
+const CHAT_HISTORY_LIMIT = 50;
+
 export function useMenschSocket() {
   const queryParams = getQueryParams();
   const directRoomId = queryParams.roomId || null;
@@ -132,7 +135,7 @@ export function useMenschSocket() {
             message: message.message,
             timestamp: Date.now(),
           };
-          setChatMessages((prev) => [...prev, chatMsg]);
+          setChatMessages((prev) => [...prev, chatMsg].slice(-CHAT_HISTORY_LIMIT));
         } else if (message.type === 'waiting_for_players') {
           // The roster is still incomplete; the room cancels itself on timeout.
           setConnectionState('connecting_room');
