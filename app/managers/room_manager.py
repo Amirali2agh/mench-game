@@ -2,6 +2,8 @@ import asyncio
 from asyncio import sleep as async_sleep
 from fastapi import WebSocket
 
+from app.config import settings
+
 class RoomManager:
     """
     Manages active in-memory WebSocket connections for game rooms
@@ -92,11 +94,11 @@ class RoomManager:
 
     async def _forfeit_timer(self, room_id: str, player_id: str, forfeit_callback) -> None:
         """
-        Asynchronous sleep timer that runs the forfeit callback after 60 seconds
-        unless canceled due to reconnection.
+        Asynchronous sleep timer that runs the forfeit callback after
+        ``settings.DISCONNECT_TIMEOUT`` seconds unless canceled due to reconnection.
         """
         try:
-            await async_sleep(60)  # Wait for 60 seconds using the locally bound async_sleep
+            await async_sleep(settings.DISCONNECT_TIMEOUT)  # Configured forfeit window
             # Timer completed! Execute forfeit callback to handle game closure
             await forfeit_callback(room_id, player_id)
         except asyncio.CancelledError:
