@@ -57,7 +57,7 @@ export function DevControl() {
       const data = await res.json();
       setGame(data);
       setError(null);
-    } catch (e) {
+    } catch {
       setError('عدم دسترسی به بک‌اند. آدرس بک‌اند را بررسی کنید.');
     }
   }, []);
@@ -86,7 +86,7 @@ export function DevControl() {
         setGame(data);
         setLastAction(`مهره ${pieceIndex + 1} ${position === -1 ? 'به پایه' : `به خانه ${position}`} رفت`);
         setTimeout(() => setLastAction(null), 2000);
-      } catch (e) {
+      } catch {
         setError('عدم دسترسی به بک‌اند. آدرس بک‌اند را بررسی کنید.');
       }
     },

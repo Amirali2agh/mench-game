@@ -129,13 +129,35 @@ export interface RoomTimeoutMessage {
  * Union type representing all possible server-to-client messages.
  * Makes handling incoming WebSocket payloads robust and type-safe.
  */
+
+/**
+ * Chat text relayed by the room WebSocket to every connected player.
+ */
+export interface ChatMessagePayload {
+  type: 'chat';
+  player_id: string;
+  player_name: string;
+  message: string;
+}
+
+/**
+ * Presence notice for a socket that dropped or came back. The server currently
+ * sends neither, but the client handles them defensively.
+ */
+export interface PlayerPresenceMessage {
+  type: 'player_disconnected' | 'opponent_disconnected' | 'player_reconnected';
+  player_id: string;
+  player_name?: string;
+}
 export type ServerMessage =
   | MatchFoundMessage
   | SyncStateMessage
   | GameInfoMessage
   | QueueTimeoutMessage
   | WaitingForPlayersMessage
-  | RoomTimeoutMessage;
+  | RoomTimeoutMessage
+  | ChatMessagePayload
+  | PlayerPresenceMessage;
 
 /**
  * Strongly typed payloads sent from the client to the server via Room WebSocket.

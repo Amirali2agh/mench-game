@@ -30,6 +30,7 @@ python -m pytest -q
 
 cd front
 npx tsc --noEmit
+npm run lint
 npm test
 npx vite build
 ```

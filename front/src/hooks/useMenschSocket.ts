@@ -113,7 +113,7 @@ export function useMenschSocket() {
 
     ws.onmessage = (event) => {
       try {
-        const message: ServerMessage | any = JSON.parse(event.data);
+        const message = JSON.parse(event.data) as ServerMessage;
 
         if (message.type === 'sync_state') {
           setGameState(message.game);

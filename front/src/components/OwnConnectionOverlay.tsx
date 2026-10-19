@@ -16,21 +16,19 @@ export const OwnConnectionOverlay: React.FC<OwnConnectionOverlayProps> = ({ stat
   const [visibleBanner, setVisibleBanner] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
-  // Show banner on unstable, auto-hide after 5s once stable
+  // Show the banner as soon as the connection weakens.
   useEffect(() => {
-    if (status === 'unstable') {
-      setVisibleBanner(true);
-      setBannerDismissed(false);
-    } else if (status === 'stable' && visibleBanner) {
-      const timer = setTimeout(() => setVisibleBanner(false), 3000);
-      return () => clearTimeout(timer);
-    }
+    if (status !== 'unstable') return;
+    setVisibleBanner(true);
+    setBannerDismissed(false);
   }, [status]);
 
-  // Reset dismiss when unstable re-appears
+  // Hide it a few seconds after the connection is stable again.
   useEffect(() => {
-    if (status === 'unstable') setBannerDismissed(false);
-  }, [status]);
+    if (status !== 'stable' || !visibleBanner) return;
+    const timer = setTimeout(() => setVisibleBanner(false), 3000);
+    return () => clearTimeout(timer);
+  }, [status, visibleBanner]);
 
   // Nothing to show when stable and no lingering banner
   if (status === 'stable' && !visibleBanner) return null;
