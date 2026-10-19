@@ -1,6 +1,7 @@
 import asyncio
 import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from app.config import settings
 from app.managers.queue_manager import queue_manager
 from app.services.queue_service import QueueService
 from app.redis_client import redis_client
@@ -9,26 +10,72 @@ from app.utils.redis_keys import RedisKeys
 router = APIRouter()
 
 
-async def _wait_for_match(websocket: WebSocket, player_id: str) -> None:
-    """Deliver match notifications from Redis even when workers differ."""
-    while True:
-        room_id = await redis_client.get(RedisKeys.player_room(player_id))
-        if room_id:
-            raw_meta = await redis_client.get(f"room:{room_id}:meta")
-            if raw_meta:
-                room_meta = json.loads(raw_meta)
-                players = [
-                    player
-                    for player in room_meta.get("players_meta", {}).values()
-                    if player.get("id")
-                ]
-                await websocket.send_json({
-                    "type": "match_found",
-                    "room_id": room_id,
-                    "players": players,
-                })
-                return
-        await asyncio.sleep(0.25)
+async def _room_players(room_id: str) -> list[dict]:
+    """Resolve the matched roster from the room document."""
+    raw_meta = await redis_client.get(f"room:{room_id}:meta")
+    if not raw_meta:
+        return []
+    room_meta = json.loads(raw_meta)
+    return [
+        player
+        for player in room_meta.get("players_meta", {}).values()
+        if player.get("id")
+    ]
+
+
+async def _match_already_created(player_id: str) -> dict | None:
+    """Return the pending match of a player, if a match already exists."""
+    room_id = await redis_client.get(RedisKeys.player_room(player_id))
+    if not room_id:
+        return None
+
+    raw_meta = await redis_client.get(f"room:{room_id}:meta")
+    if not raw_meta:
+        return None
+
+    room_meta = json.loads(raw_meta)
+    return {
+        "room_id": room_id,
+        "pieces_count": int(room_meta.get("pieces_count") or 0),
+    }
+
+
+async def _wait_for_match(
+    websocket: WebSocket,
+    player_id: str,
+    target_players: int,
+    pieces_count: int,
+) -> None:
+    """
+    Deliver the match of a waiting player, or time the queue entry out.
+
+    Matches arrive through a per-player Redis list, so the player can be
+    connected to any worker. When nothing shows up within MATCHMAKING_TIMEOUT the
+    player is removed from the queue and receives ``queue_timeout`` instead of
+    waiting forever.
+    """
+    match = await _match_already_created(player_id)
+    if match is None:
+        popped = await redis_client.blpop(
+            [RedisKeys.queue_notifications(player_id)],
+            timeout=settings.MATCHMAKING_TIMEOUT,
+        )
+        if popped is not None:
+            _key, raw = popped
+            match = json.loads(raw)
+
+    if match is None:
+        await QueueService.remove_from_queue(player_id, target_players, pieces_count)
+        await websocket.send_json({"type": "queue_timeout", "player_id": player_id})
+        return
+
+    room_id = match["room_id"]
+    await websocket.send_json({
+        "type": "match_found",
+        "room_id": room_id,
+        "players": await _room_players(room_id),
+        "pieces_count": int(match.get("pieces_count") or pieces_count),
+    })
 
 
 @router.websocket("/ws/queue")
@@ -61,12 +108,13 @@ async def websocket_queue_endpoint(
                 playerId,
                 match_result["room_id"],
                 match_result["players"],
+                match_result["pieces_count"],
             )
         else:
             # The first player may be connected to a different worker from the
-            # player that completes the match. Redis polling closes that gap.
+            # player that completes the match. Redis closes that gap.
             match_watch_task = asyncio.create_task(
-                _wait_for_match(websocket, playerId)
+                _wait_for_match(websocket, playerId, playerCount, piecesCount)
             )
 
         while True:

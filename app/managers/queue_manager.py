@@ -23,17 +23,25 @@ class QueueManager:
         if player_id in self.active_connections:
             del self.active_connections[player_id]
 
-    async def send_match_found(self, player_id: str, room_id: str, players: list[dict]) -> None:
+    async def send_match_found(
+        self,
+        player_id: str,
+        room_id: str,
+        players: list[dict],
+        pieces_count: int,
+    ) -> None:
         """
         Sends a direct notification to a specific player informing them 
-        that a match has been found, providing the target room_id and matched players.
+        that a match has been found, providing the target room_id, the matched
+        players and the piece count the room was created with.
         """
         websocket = self.active_connections.get(player_id)
         if websocket:
             payload = {
                 "type": "match_found",
                 "room_id": room_id,
-                "players": players
+                "players": players,
+                "pieces_count": pieces_count,
             }
             try:
                 await websocket.send_json(payload)

@@ -22,6 +22,9 @@ ROOM_STATUS_CANCELLED = "cancelled"
 #: How often a waiting WebSocket checks whether the roster has been completed.
 ROOM_READY_POLL_INTERVAL = 0.25
 
+#: Lifetime of the one-shot "winner already reported" claim.
+WINNER_REPORT_TTL = 24 * 60 * 60
+
 
 def room_meta_key(room_id: str) -> str:
     return f"room:{room_id}:meta"
@@ -158,6 +161,60 @@ async def wait_for_game(room_id: str, timeout: float) -> dict | None:
         if remaining <= 0:
             return None
         await asyncio.sleep(min(ROOM_READY_POLL_INTERVAL, remaining))
+
+
+def winner_report_key(room_id: str) -> str:
+    return f"room:{room_id}:winner_reported"
+
+
+async def claim_winner_report(room_id: str) -> bool:
+    """Reserve the single winner report of the current match.
+
+    ``report_winner`` pays out the prize, so only the first caller may report:
+    a duplicated forfeit timer or a reconnect must never pay twice. The claim is
+    released when a rematch starts, so the next match reports its own winner.
+    """
+    claimed = await redis_client.set(
+        winner_report_key(room_id), "1", nx=True, ex=WINNER_REPORT_TTL
+    )
+    return bool(claimed)
+
+
+async def clear_winner_report(room_id: str) -> None:
+    await redis_client.delete(winner_report_key(room_id))
+
+
+async def start_rematch(room_id: str, player_id: str) -> dict:
+    """Restart a finished match with the same roster and settings.
+
+    Only a seated player may restart, and only once the previous match is over,
+    so a rematch can never wipe a game that is still being played.
+    """
+    room = await get_room(room_id)
+    if room is None:
+        raise ValueError("Room not found")
+
+    state = await GameService.get_game(room_id)
+    if state is None:
+        raise ValueError("Game not found")
+    if state.get("status") != "finished":
+        raise ValueError("The current game is still in progress")
+
+    players = state.get("players") or []
+    if player_id not in {player["id"] for player in players}:
+        raise ValueError("Only a seated player can start a rematch")
+
+    new_state = await GameService.create_game(
+        room_id,
+        players,
+        pieces_count=int(state.get("pieces_count") or pieces_count(room)),
+        player_count=int(state.get("player_count") or required_players(room)),
+        coin_bet=coin_bet(room) or int(state.get("coin_bet") or 0),
+    )
+    room["status"] = ROOM_STATUS_PLAYING
+    await save_room(room_id, room)
+    await clear_winner_report(room_id)
+    return new_state
 
 
 async def cancel_room(room_id: str, room: dict) -> None:

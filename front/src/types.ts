@@ -88,18 +88,58 @@ export interface GameInfoMessage {
 }
 
 /**
+ * Message received from the queue WebSocket when no match was found within
+ * MATCHMAKING_TIMEOUT. The player has already been removed from the queue.
+ */
+export interface QueueTimeoutMessage {
+  type: 'queue_timeout';
+  player_id: string;
+}
+
+/**
+ * Message received from a room WebSocket while the roster is still incomplete.
+ * The match starts as soon as `required` players are seated.
+ */
+export interface WaitingForPlayersMessage {
+  type: 'waiting_for_players';
+  room_id: string;
+  joined: number;
+  required: number;
+  players: Player[];
+}
+
+/**
+ * Message received when a room could not fill its roster in time and was
+ * cancelled, so the player has to join a new room.
+ */
+export interface RoomTimeoutMessage {
+  type: 'room_timeout';
+  room_id: string;
+  joined: number;
+  required: number;
+}
+
+/**
  * Union type representing all possible server-to-client messages.
  * Makes handling incoming WebSocket payloads robust and type-safe.
  */
-export type ServerMessage = MatchFoundMessage | SyncStateMessage | GameInfoMessage;
+export type ServerMessage =
+  | MatchFoundMessage
+  | SyncStateMessage
+  | GameInfoMessage
+  | QueueTimeoutMessage
+  | WaitingForPlayersMessage
+  | RoomTimeoutMessage;
 
 /**
  * Strongly typed payloads sent from the client to the server via Room WebSocket.
- * Includes rolling the dice, moving a piece, going to next round, or restarting the game.
+ * Includes rolling the dice, moving a piece, starting the next match, and passing
+ * a turn the player cannot play.
  */
 export type ClientAction =
   | { action: 'roll_dice' }
   | { action: 'move_piece'; piece_index: number }
   | { action: 'next_round' }
+  /** @deprecated Server-side alias of `next_round`; kept for older clients. */
   | { action: 'restart_game' }
   | { action: 'pass_turn' };

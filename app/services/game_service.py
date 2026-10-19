@@ -63,6 +63,7 @@ class GameService:
             "pieces": pieces,
             "status": "playing",
             "winner_id": None,
+            "eliminated_players": [],
             "last_roll": None,
             "coin_bet": coin_bet,
             # Seat -> absolute track offset, so clients never re-implement the
@@ -87,14 +88,9 @@ class GameService:
     @staticmethod
     async def roll_dice(room_id: str, player_id: str) -> dict:
         state = await GameService.get_game(room_id)
-        if not state or state["status"] == "finished":
+        if not state:
             raise ValueError("Game not active")
-
-        active_player_idx = GameService._current_player_index(state)
-        active_player = state["players"][active_player_idx]
-
-        if active_player["id"] != player_id:
-            raise ValueError("Not your turn")
+        GameService._ensure_can_act(state, player_id)
 
         if state["dice_rolled"]:
             raise ValueError("Dice already rolled")
@@ -175,14 +171,9 @@ class GameService:
         piece_index: int,
     ) -> dict:
         state = await GameService.get_game(room_id)
-        if not state or state["status"] == "finished":
+        if not state:
             raise ValueError("Game not active")
-
-        active_player_idx = GameService._current_player_index(state)
-        active_player = state["players"][active_player_idx]
-
-        if active_player["id"] != player_id:
-            raise ValueError("Not your turn")
+        GameService._ensure_can_act(state, player_id)
 
         if not state["dice_rolled"]:
             raise ValueError("Must roll dice first")
@@ -221,6 +212,29 @@ class GameService:
             else:
                 state = GameService._rotate_turn(state)
 
+        await GameService.save_game(room_id, state)
+        return state
+
+    @staticmethod
+    async def pass_turn(room_id: str, player_id: str) -> dict:
+        """
+        Hand the turn over, but only for the active player who cannot move.
+
+        The client runs a turn timer, so a blocked or idle player must be able to
+        pass. Passing while a legal move is still on the board is refused: it
+        would let a player skip a turn instead of playing it.
+        """
+        state = await GameService.get_game(room_id)
+        if not state:
+            raise ValueError("Game not active")
+        GameService._ensure_can_act(state, player_id)
+
+        dice = state.get("dice")
+        if state.get("dice_rolled") and dice is not None:
+            if GameService._player_has_valid_moves(state, player_id, dice):
+                raise ValueError("You still have a legal move")
+
+        state = GameService._rotate_turn(state)
         await GameService.save_game(room_id, state)
         return state
 
@@ -287,6 +301,18 @@ class GameService:
         return captured_any
 
     @staticmethod
+    def _ensure_can_act(state: dict, player_id: str) -> None:
+        """Reject actions from finished games, eliminated players and idle seats."""
+        if state.get("status") != "playing":
+            raise ValueError("Game not active")
+        if player_id in (state.get("eliminated_players") or []):
+            raise ValueError("You are no longer playing this match")
+
+        active_player = state["players"][GameService._current_player_index(state)]
+        if active_player["id"] != player_id:
+            raise ValueError("Not your turn")
+
+    @staticmethod
     def _current_player_index(state: dict) -> int:
         """
         Return the index of the active seat, clamping a stale ``current_turn``.
@@ -314,21 +340,42 @@ class GameService:
         configured ``player_count``: the four-player non-diagonal seat order
         only applies while all four seats are occupied.
         """
-        joined_count = len(state.get("players") or [])
+        players = state.get("players") or []
+        joined_count = len(players)
         current_idx = state.get("current_turn", 0)
 
-        if not isinstance(current_idx, int) or not 0 <= current_idx < joined_count:
-            # Player removed or roster restored out of range: land on seat 0
-            # instead of raising ValueError from turn_order.index().
-            state["current_turn"] = 0
-        elif joined_count:
+        if joined_count:
             if state.get("player_count") == 4:
                 turn_order = [seat for seat in (0, 3, 1, 2) if seat < joined_count]
             else:
                 turn_order = list(range(joined_count))
-            state["current_turn"] = turn_order[
-                (turn_order.index(current_idx) + 1) % len(turn_order)
-            ]
+
+            # Eliminated players (forfeit) are skipped instead of stalling the
+            # match on a seat nobody owns any more.
+            eliminated = set(state.get("eliminated_players") or [])
+            active_seats = [
+                seat for seat in turn_order if players[seat].get("id") not in eliminated
+            ] or turn_order
+
+            if not isinstance(current_idx, int) or not 0 <= current_idx < joined_count:
+                # Player removed or roster restored out of range: land on the
+                # first active seat instead of raising from turn_order.index().
+                state["current_turn"] = active_seats[0]
+            elif current_idx in active_seats:
+                state["current_turn"] = active_seats[
+                    (active_seats.index(current_idx) + 1) % len(active_seats)
+                ]
+            else:
+                # The seat that just dropped out: continue after its position.
+                position = (
+                    turn_order.index(current_idx)
+                    if current_idx in turn_order
+                    else -1
+                )
+                following = [
+                    seat for seat in active_seats if turn_order.index(seat) > position
+                ]
+                state["current_turn"] = following[0] if following else active_seats[0]
 
         # Issue #13: the previous player's roll must never leak into this turn.
         # ``last_roll`` is intentionally kept: clients replay it as history.

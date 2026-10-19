@@ -44,11 +44,12 @@ async def test_queue_manager_send_match_found():
         {"id": "player2", "name": "Ali", "avatar": ""}
     ]
     
-    await manager.send_match_found("player1", "test-room-uuid", matched_players)
+    await manager.send_match_found("player1", "test-room-uuid", matched_players, 3)
     
     expected_payload = {
         "type": "match_found",
         "room_id": "test-room-uuid",
-        "players": matched_players
+        "players": matched_players,
+        "pieces_count": 3,
     }
     mock_ws.send_json.assert_called_once_with(expected_payload)

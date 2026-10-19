@@ -50,7 +50,20 @@ JSON
   "pieces_count": 4
 }
 `match_found` is delivered to every matched player and always carries
-`pieces_count`; treat the field as required.
+`pieces_count`; treat the field as required. Delivery goes through a per-player
+Redis inbox (`queue:notify:{player_id}`), so a player may be connected to a
+different worker than the one that completed the match.
+
+Queue Timeout Event:
+When no match is found within MATCHMAKING_TIMEOUT seconds, the player is removed
+from the queue and receives:
+
+{
+  "type": "queue_timeout",
+  "player_id": "p1"
+}
+
+The client should return to the lobby and may join the queue again.
 
 Action Required by Frontend: Upon receiving this message, the frontend must immediately close the queue WebSocket connection and redirect the user to the active game room WebSocket.
 3. Game Room Connection (/ws/room/{room_id})
@@ -114,20 +127,32 @@ JSON
   "action": "move_piece",
   "piece_index": 0
 }
-4.3 Next Round
-To restart the board but preserve player scores/stats (useful after a match completes):
+4.3 Next Match (Rematch)
+To start a new match on the same board with the same roster and the same settings
+(pieces_count, player_count, coin_bet):
 code
 JSON
 {
   "action": "next_round"
 }
-4.4 Restart Game
-To completely clear and restart the session:
+`restart_game` is accepted as an alias of the same action so older clients keep
+working; new clients should send `next_round`.
+The server only accepts a rematch when the room has a finished game and the
+sender is seated in that room. Anything else answers with an
+{"type": "error", ...} message and leaves the running match untouched. A rematch
+also clears pending disconnect timers and the "winner already reported" guard, so
+the new match reports its own winner.
+4.4 Pass Turn
+The turn timer sends `pass_turn` when the active player runs out of time:
 code
 JSON
 {
-  "action": "restart_game"
+  "action": "pass_turn"
 }
+Only the active player may pass, and only while no legal move is available (the
+engine also passes a blocked player automatically). Passing while a move is still
+possible is rejected with {"type": "error", "message": "You still have a legal
+move"}.
 5. Board Grid Mapping & Movement Specs
 To map the relative coordinates sent by the server to the physical visual board:
 Starting Base/Yard: -1 (Requires rolling a 6 to move to position 0).
@@ -145,9 +170,12 @@ For 4 Players: seat 0 = index 20, seat 1 = index 30, seat 2 = index 0, seat 3 = 
 The resolved per-seat values are always sent as `track_offsets` in `sync_state`,
 so clients never re-implement this table.
 6. Disconnect Forfeit System (The 60-Second Rule)
-If any player disconnects (due to network failure, app closing, etc.), the server triggers an asynchronous 60-second countdown forfeit timer for that player.
+If any player disconnects (due to network failure, app closing, etc.), the server arms an asynchronous 60-second forfeit timer for that player.
 Reconnection: If the player connects back to ws://localhost:8000/ws/room/{room_id} before the 60 seconds expire, the forfeit timer is canceled, and they resume playing.
-Forfeit Trigger: If the timer reaches 60 seconds, the server terminates the game, marks status as "finished", sets the remaining online opponent as winner_id, and broadcasts the final sync_state.
+Forfeit Trigger: When the timer expires the disconnected player is eliminated:
+- Two players: the match ends at once, status becomes "finished" and the remaining player is the winner_id.
+- Three or four players: the match keeps playing, the eliminated player is skipped by the turn rotation, and the game ends only when a single player is left.
+The resulting sync_state is broadcast to the room. The prize report happens exactly once per match: the first reporter claims room:{room_id}:winner_reported in Redis, and any later call (duplicate timer, reconnect) is a no-op.
 code
 Code
 ---
@@ -172,3 +200,16 @@ cancelled: clients receive {"type": "room_timeout", "room_id": "abc123",
 "joined": 2, "required": 4} and the room status becomes "cancelled". A 4-player
 room with two players therefore never starts a two-player match on a four-seat
 board.
+
+
+Room REST Payload Rules
+POST /api/rooms accepts:
+- player_count: 2 or 4
+- pieces_count: 2, 3 or 4
+- coin_bet: integer >= 0
+- player1_id (required) and player2_id (optional): [A-Za-z0-9_.-]{1,64}
+- room_id (optional): [A-Za-z0-9_-]{1,64}; generated when omitted
+Anything else is rejected with 422. POST /api/rooms/{room_id}/join requires a
+player_id with the same format and only succeeds while the room is still waiting
+for players. The room document (room:{room_id}:meta) is the single source of
+truth for player_count, pieces_count and coin_bet; no side keys are written.

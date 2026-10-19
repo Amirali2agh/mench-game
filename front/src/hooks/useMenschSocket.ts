@@ -130,6 +130,12 @@ export function useMenschSocket() {
             timestamp: Date.now(),
           };
           setChatMessages((prev) => [...prev, chatMsg]);
+        } else if (message.type === 'waiting_for_players') {
+          // The roster is still incomplete; the room cancels itself on timeout.
+          setConnectionState('connecting_room');
+        } else if (message.type === 'room_timeout') {
+          setError('زمان انتظار برای تکمیل بازیکنان به پایان رسید.');
+          setConnectionState('idle');
         } else if (message.type === 'game_info') {
           setGameInfo(message);
           // Update player info from porteghal-provided metadata
@@ -193,6 +199,11 @@ export function useMenschSocket() {
         if (message.type === 'match_found') {
           disconnectAll();
           connectToRoom(message.room_id, playerId, name);
+        } else if (message.type === 'queue_timeout') {
+          setError('زمان انتظار در صف به پایان رسید. لطفاً دوباره تلاش کنید.');
+          setConnectionState('idle');
+          queueSocketRef.current = null;
+          ws.close();
         }
       } catch (err) {
         console.error('Failed to parse queue WebSocket message:', err);
@@ -229,7 +240,6 @@ export function useMenschSocket() {
     sendAction({ action: 'move_piece', piece_index: pieceIndex });
   }, [sendAction]);
   const nextRound = useCallback(() => sendAction({ action: 'next_round' }), [sendAction]);
-  const restartGame = useCallback(() => sendAction({ action: 'restart_game' }), [sendAction]);
   const passTurn = useCallback(() => sendAction({ action: 'pass_turn' }), [sendAction]);
   const leaveGame = useCallback(() => {
     disconnectAll();
@@ -327,7 +337,6 @@ export function useMenschSocket() {
     rollDice,
     movePiece,
     nextRound,
-    restartGame,
     leaveGame,
     passTurn,
     sendChatMessage,

@@ -35,6 +35,14 @@ class RedisKeys:
         return f"player:{player_id}:room"
 
     @staticmethod
+    def queue_notifications(player_id: str) -> str:
+        """
+        Returns the per-player match inbox written by the matchmaking queue.
+        Example output: "queue:notify:12345"
+        """
+        return f"queue:notify:{player_id}"
+
+    @staticmethod
     def player_disconnect(player_id: str) -> str:
         """
         Returns the key storing the timestamp when a player disconnected.

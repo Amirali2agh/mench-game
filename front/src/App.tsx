@@ -37,7 +37,6 @@ export function App() {
         rollDice,
         movePiece,
         nextRound,
-        restartGame,
         leaveGame,
         passTurn,
         sendChatMessage,
@@ -125,7 +124,6 @@ export function App() {
           players={gameState.players}
           localPlayerId={playerId}
           onNextRound={nextRound}
-          onRestartGame={restartGame}
           onLeave={leaveGame}
         />
       )}
