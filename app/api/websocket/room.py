@@ -1,10 +1,13 @@
 import json
 import asyncio
+import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, status
 from app.managers.room_manager import room_manager
 from app.services.game_service import GameService
 from app.redis_client import redis_client
 from app.services.prize_service import report_winner, update_room_status
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -52,8 +55,8 @@ async def report_game_winner(room_id: str, state: dict) -> None:
                     win_type="normal",
                 )
             await update_room_status(room_id=room_id, status="finished")
-    except Exception as e:
-        print(f"⚠️ Prize service error: {e}")
+    except Exception as exc:
+        logger.warning("Prize service error for room %s: %s", room_id, exc)
 
 
 async def handle_gameplay_loop(

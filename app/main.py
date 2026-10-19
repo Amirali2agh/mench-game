@@ -30,6 +30,9 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(rooms_router)
 app.include_router(queue_router)
- # این خط را بالا اضافه کنید
-app.include_router(room_router) # این خط را پایین اضافه کنید
-app.include_router(dev_router)
+app.include_router(room_router)
+
+# The dev router exposes cheat endpoints that can mutate live games, so it is
+# only mounted when debug mode is explicitly enabled.
+if settings.DEBUG:
+    app.include_router(dev_router)

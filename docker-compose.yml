@@ -15,6 +15,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - DEBUG=${DEBUG:-false}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - PORTEGHAL_API_URL=http://pocketbase:8090

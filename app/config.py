@@ -4,7 +4,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # تنظیمات عمومی پروژه
     PROJECT_NAME: str = "Mensch Multiplayer Game"
-    DEBUG: bool = True
+    # Debug mode must be opt-in: it mounts the /api/dev cheat endpoints, which
+    # can write arbitrary piece positions into live games.
+    DEBUG: bool = False
     
     # تنظیمات اتصال به Redis
     REDIS_HOST: str = "localhost"

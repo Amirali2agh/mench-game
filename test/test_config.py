@@ -8,7 +8,8 @@ def test_default_settings():
     
     # بررسی مقادیر پیش‌فرض عمومی
     assert settings.PROJECT_NAME == "Mensch Multiplayer Game"
-    assert settings.DEBUG is True
+    # Debug mode must be opt-in: it exposes the /api/dev cheat endpoints.
+    assert settings.DEBUG is False
     
     # بررسی مقادیر پیش‌فرض رادیس
     expected_host = os.getenv("REDIS_HOST", "localhost")
