@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from app.api.security import resolve_websocket_player
 from app.config import settings
@@ -8,6 +9,8 @@ from app.services.queue_service import QueueService
 from app.redis_client import redis_client
 from app.utils.limits import MAX_FRAME_BYTES, MAX_PLAYER_NAME_CHARS, TokenBucket, sanitize_text
 from app.utils.redis_keys import RedisKeys
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -148,6 +151,7 @@ async def websocket_queue_endpoint(
             player_id, playerCount, piecesCount
         )
     except Exception:
+        logger.exception("Queue socket failed for %s", player_id)
         queue_manager.disconnect(player_id)
         await QueueService.remove_from_queue(
             player_id, playerCount, piecesCount

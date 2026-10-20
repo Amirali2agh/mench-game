@@ -12,7 +12,7 @@ import asyncio
 import pytest
 
 from app.services import room_service as RoomService
-from app.services.game_service import GameService
+from app.services.game_service import GameService, RollResult
 from app.utils.room_lock import RoomLockTimeout, room_lock
 
 ROOM_ID = "lock-room"
@@ -46,7 +46,7 @@ async def test_concurrent_rolls_are_serialized(fake_redis, monkeypatch):
         return_exceptions=True,
     )
 
-    successes = [result for result in results if isinstance(result, dict)]
+    successes = [result for result in results if isinstance(result, RollResult)]
     errors = [result for result in results if isinstance(result, Exception)]
 
     assert len(successes) == 1
@@ -139,10 +139,10 @@ async def test_state_version_advances_on_every_save(fake_redis, monkeypatch):
     _fixed_dice(monkeypatch, 3)
 
     rolled = await GameService.roll_dice(ROOM_ID, "p1")
-    assert rolled["version"] > first_version
+    assert rolled.state["version"] > first_version
 
     moved = await GameService.move_piece(ROOM_ID, "p1", 0)
-    assert moved["version"] > rolled["version"]
+    assert moved["version"] > rolled.state["version"]
 
 
 class _PausedAnimation:
@@ -158,23 +158,32 @@ class _PausedAnimation:
 
 
 @pytest.mark.asyncio
-async def test_pass_turn_during_the_dice_animation_rotates_only_once(fake_redis, monkeypatch):
-    """The roll that waits for the animation must not rotate a second time."""
+async def test_pass_turn_during_the_dice_animation_rotates_only_once(
+    fake_redis, monkeypatch
+):
+    """The delayed advance must not rotate a turn the player already passed."""
+    from app.api.websocket.room import auto_advance_turn
+
     await _new_game(positions=[-1, -1, -1, -1])
     _fixed_dice(monkeypatch, 3)
     animation = _PausedAnimation()
-    monkeypatch.setattr("app.services.game_service.asyncio", animation)
+    # The delay now lives in the transport layer, not in the engine.
+    monkeypatch.setattr("app.api.websocket.room.asyncio", animation)
 
-    roll_task = asyncio.create_task(GameService.roll_dice(ROOM_ID, "p1"))
+    result = await GameService.roll_dice(ROOM_ID, "p1")
+    assert result.auto_pass is True
+    # The engine returns before the animation: the turn is still p1's.
+    assert (await GameService.get_game(ROOM_ID))["current_turn"] == 0
+
+    advance_task = asyncio.create_task(auto_advance_turn(ROOM_ID, result.state))
     await asyncio.wait_for(animation.entered.wait(), timeout=1)
 
     passed = await GameService.pass_turn(ROOM_ID, "p1")
     assert passed["current_turn"] == 1
 
     animation.resume.set()
-    final = await asyncio.wait_for(roll_task, timeout=1)
+    await asyncio.wait_for(advance_task, timeout=1)
 
-    assert final["current_turn"] == 1
     stored = await GameService.get_game(ROOM_ID)
     assert stored["current_turn"] == 1
     assert stored["dice"] is None

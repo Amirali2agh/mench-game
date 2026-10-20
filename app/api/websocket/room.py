@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
@@ -21,7 +22,53 @@ from app.utils.room_lock import room_lock
 
 logger = logging.getLogger(__name__)
 
+#: How long to keep the rolled dice on screen before handing the turn on.
+AUTO_PASS_DELAY_SECONDS = 2
+
+#: Fire-and-forget tasks keep a reference until they finish.
+_background_tasks: set[asyncio.Task] = set()
+
 router = APIRouter()
+
+
+async def broadcast_room(room_id: str, message: dict) -> None:
+    """
+    Broadcast to the room and start the disconnect flow for dead sockets.
+
+    ``RoomManager.broadcast`` prunes a socket whose send failed; the player is
+    then on the 60-second forfeit clock like any other disconnect.
+    """
+    failed = await room_manager.broadcast(room_id, message)
+    for player_id in failed:
+        room_manager.start_disconnect_timer(
+            room_id, player_id, forfeit_active_player
+        )
+
+
+async def auto_advance_turn(room_id: str, rolled_state: dict) -> None:
+    """
+    Wait for the client dice animation, then hand the turn to the next player.
+
+    This runs as a background task so the socket's receive loop is never
+    blocked; a pass_turn that lands meanwhile wins because the rotation is
+    re-checked under the room lock.
+    """
+    await asyncio.sleep(AUTO_PASS_DELAY_SECONDS)
+    try:
+        state = await GameService.advance_after_roll(room_id, rolled_state)
+    except Exception:
+        logger.exception("Automatic turn advance failed for room %s", room_id)
+        return
+    if state is None:
+        return
+    await broadcast_room(room_id, {"type": "sync_state", "game": state})
+
+
+def _spawn(coro) -> None:
+    """Run ``coro`` in the background, keeping a reference until it finishes."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 async def forfeit_active_player(room_id: str, player_id: str) -> None:
@@ -60,7 +107,7 @@ async def forfeit_active_player(room_id: str, player_id: str) -> None:
 
         await GameService.save_game(room_id, state)
 
-    await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
+    await broadcast_room(room_id, {"type": "sync_state", "game": state})
     await report_game_winner(room_id, state)
 
 
@@ -130,8 +177,12 @@ async def handle_gameplay_loop(
             action = message.get("action")
 
             if action == "roll_dice":
-                state = await GameService.roll_dice(room_id, player_id)
-                await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
+                result = await GameService.roll_dice(room_id, player_id)
+                await broadcast_room(
+                    room_id, {"type": "sync_state", "game": result.state}
+                )
+                if result.auto_pass:
+                    _spawn(auto_advance_turn(room_id, result.state))
 
             elif action == "move_piece":
                 piece_index = message.get("piece_index")
@@ -145,7 +196,7 @@ async def handle_gameplay_loop(
                     continue
 
                 state = await GameService.move_piece(room_id, player_id, parsed_index)
-                await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
+                await broadcast_room(room_id, {"type": "sync_state", "game": state})
                 await report_game_winner(room_id, state)
 
             elif action in ("next_round", "restart_game"):
@@ -153,12 +204,12 @@ async def handle_gameplay_loop(
                 # alias so older clients keep working.
                 state = await RoomService.start_rematch(room_id, player_id)
                 room_manager.cancel_disconnect_timers(room_id)
-                await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
+                await broadcast_room(room_id, {"type": "sync_state", "game": state})
 
             elif action == "chat":
                 chat_text = sanitize_text(message.get("message"), MAX_CHAT_CHARS)
                 if chat_text:
-                    await room_manager.broadcast(room_id, {
+                    await broadcast_room(room_id, {
                         "type": "chat",
                         "player_id": player_id,
                         "player_name": sender_name,
@@ -167,7 +218,7 @@ async def handle_gameplay_loop(
 
             elif action == "pass_turn":
                 state = await GameService.pass_turn(room_id, player_id)
-                await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
+                await broadcast_room(room_id, {"type": "sync_state", "game": state})
 
         except json.JSONDecodeError:
             await websocket.send_json({"type": "error", "message": "Malformed JSON payload received"})
@@ -224,7 +275,7 @@ async def _prepare_room(websocket: WebSocket, room_id: str, player: dict) -> dic
     if state:
         return state
 
-    await room_manager.broadcast(room_id, {
+    await broadcast_room(room_id, {
         "type": "waiting_for_players",
         "room_id": room_id,
         "joined": len(RoomService.roster(room)),
@@ -237,7 +288,7 @@ async def _prepare_room(websocket: WebSocket, room_id: str, player: dict) -> dic
         return state
 
     await RoomService.cancel_room(room_id, room)
-    await room_manager.broadcast(room_id, {
+    await broadcast_room(room_id, {
         "type": "room_timeout",
         "room_id": room_id,
         "joined": len(RoomService.roster(room)),
@@ -281,17 +332,25 @@ async def websocket_room_endpoint(
             await websocket.close()
             return
 
-        await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
+        await broadcast_room(room_id, {"type": "sync_state", "game": state})
         await handle_gameplay_loop(
             websocket, room_id, player_id, player.get("name") or playerName
         )
 
     except WebSocketDisconnect:
         room_manager.disconnect(room_id, player_id, websocket)
-        room_manager.start_disconnect_timer(room_id, player_id, forfeit_active_player)
+        # A reconnect replaces the socket; only a player with no live socket
+        # starts the forfeit clock.
+        if not room_manager.is_connected(room_id, player_id):
+            room_manager.start_disconnect_timer(
+                room_id, player_id, forfeit_active_player
+            )
     except Exception:
+        # A coding error must never forfeit a live match; log it and drop the
+        # connection instead of arming the timer.
+        logger.exception("Room socket failed for %s/%s", room_id, player_id)
         room_manager.disconnect(room_id, player_id, websocket)
-        room_manager.start_disconnect_timer(room_id, player_id, forfeit_active_player)
+        await websocket.close(code=1011)
 
 
 @router.websocket("/ws/game/{room_id}/{player_num}")
@@ -365,14 +424,22 @@ async def websocket_game_endpoint(
             await websocket.close()
             return
 
-        await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
+        await broadcast_room(room_id, {"type": "sync_state", "game": state})
         await handle_gameplay_loop(
             websocket, room_id, player_id, player.get("name") or player_name
         )
 
     except WebSocketDisconnect:
         room_manager.disconnect(room_id, player_id, websocket)
-        room_manager.start_disconnect_timer(room_id, player_id, forfeit_active_player)
+        # A reconnect replaces the socket; only a player with no live socket
+        # starts the forfeit clock.
+        if not room_manager.is_connected(room_id, player_id):
+            room_manager.start_disconnect_timer(
+                room_id, player_id, forfeit_active_player
+            )
     except Exception:
+        # A coding error must never forfeit a live match; log it and drop the
+        # connection instead of arming the timer.
+        logger.exception("Room socket failed for %s/%s", room_id, player_id)
         room_manager.disconnect(room_id, player_id, websocket)
-        room_manager.start_disconnect_timer(room_id, player_id, forfeit_active_player)
+        await websocket.close(code=1011)

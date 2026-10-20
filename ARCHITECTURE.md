@@ -218,7 +218,10 @@ All actions are JSON text frames. Unknown or malformed payloads receive an
 
 Only the active player may roll, and only once per turn. When the roll leaves
 the player with no legal move, the server broadcasts the roll and advances the
-turn automatically after a short delay so the client can animate it.
+turn automatically after a short delay so the client can animate it. The delay
+runs as a background task, not inside the socket's receive loop, so other
+actions (a `pass_turn`, for example) are still processed meanwhile; the delayed
+rotation re-checks the state under the room lock and never rotates twice.
 
 ### 5.2 Move a piece
 
@@ -326,13 +329,20 @@ fails if the client table drifts from `app/services/board_layout.py`.
 1. A WebSocket close starts the forfeit timer for that player
    (`DISCONNECT_TIMEOUT`, 60 seconds by default).
 2. Reconnecting to the same room with the same `playerId` cancels the timer and
-   resumes play; seating is idempotent for an already seated player.
+   resumes play; seating is idempotent for an already seated player. The old
+   socket is closed, and only a player with no live socket starts the timer.
 3. When the timer expires, the player is added to `eliminated_players`:
    * two players — the match ends immediately, `status` becomes `finished` and
      the remaining player is `winner_id`;
    * three or four players — the match continues, the eliminated seat is skipped
      by turn rotation, and the last remaining player wins.
 4. The resulting `sync_state` is broadcast to the room.
+
+A broadcast whose send fails is logged, and that socket is dropped from the
+registry and put on the forfeit clock, so a vanished client cannot keep
+receiving retries forever. Sends to the other players are not delayed by it.
+An unexpected error inside a socket handler is logged and closes the socket
+with code `1011` instead of forfeiting the player.
 
 The prize report happens exactly once per match: the first reporter claims
 `room:{room_id}:winner_reported` in Redis and later calls (duplicate timer,
