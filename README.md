@@ -126,7 +126,8 @@ The backend reads environment variables (and `.env`) through
 | `ALLOWED_CORS_ORIGINS` | empty | Comma-separated browser origin allowlist. Empty means same-origin only (the proxy setup); `*` is refused unless `DEBUG=true` |
 
 Never commit a real `PORTEGHAL_API_KEY` or `GAME_TOKEN_SECRET`. Both are read
-from the environment only.
+from the environment only. If either one leaks, follow
+[the rotation runbook](docs/deployment.md#7-rotating-the-shared-secrets).
 
 The frontend has its own build-time configuration, documented in
 `front/.env.example`:
