@@ -42,7 +42,7 @@ const Dice: React.FC<DiceProps> = ({ value, isRolling, rollId, className = '' })
 
   return (
     <div className={`relative flex h-10 w-10 items-center justify-center dice-perspective ${className}`}>
-      <div className="absolute -bottom-1 h-1.5 w-7 rounded-full bg-black/30 blur-[2px]" />
+      <div className="absolute -bottom-1 h-1.5 w-7 rounded-full bg-black/20 shadow-[0_2px_4px_rgba(0,0,0,0.25)]" />
       <div
         className="dice-cube"
         style={{
@@ -50,6 +50,8 @@ const Dice: React.FC<DiceProps> = ({ value, isRolling, rollId, className = '' })
           '--dice-target-y': `${target.y}deg`,
           transform: `rotateX(${target.x}deg) rotateY(${target.y}deg)`,
           animation: isRolling ? 'dice-roll 1.3s cubic-bezier(0.15, 0.85, 0.35, 1.2) forwards' : 'none',
+          // Promote the cube only while it actually moves.
+          willChange: isRolling ? 'transform' : 'auto',
         } as React.CSSProperties}
         data-roll-id={rollId ?? undefined}
       >
@@ -64,4 +66,6 @@ const Dice: React.FC<DiceProps> = ({ value, isRolling, rollId, className = '' })
   );
 };
 
-export default Dice;
+// The cube only depends on its own props; memoising keeps dice re-renders out
+// of unrelated board updates.
+export default React.memo(Dice);
