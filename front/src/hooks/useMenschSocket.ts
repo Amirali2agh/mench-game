@@ -40,6 +40,8 @@ export function useMenschSocket() {
   const externalPlayerId = queryParams.playerId || '';
   const externalPlayerName = queryParams.playerName || '';
   const externalPlayerAvatar = queryParams.playerAvatar || '';
+  // Signed identity handed over by the host; the server derives player_id from it.
+  const externalToken = queryParams.token || '';
 
   const [connectionState, setConnectionState] = useState<SocketConnectionState>(
     directRoomId ? 'connecting_room' : 'idle'
@@ -101,7 +103,9 @@ export function useMenschSocket() {
     disconnectAll();
     reconnectAttemptedRef.current = false;
 
-    const wsUrl = `${wsBaseUrl}/ws/room/${rId}?playerId=${pId}&playerName=${encodeURIComponent(pName)}`;
+    const roomParams = new URLSearchParams({ playerId: pId, playerName: pName });
+    if (externalToken) roomParams.set('token', externalToken);
+    const wsUrl = `${wsBaseUrl}/ws/room/${rId}?${roomParams.toString()}`;
     const ws = new WebSocket(wsUrl);
     roomSocketRef.current = ws;
 
@@ -142,6 +146,14 @@ export function useMenschSocket() {
         } else if (message.type === 'room_timeout') {
           setError('زمان انتظار برای تکمیل بازیکنان به پایان رسید.');
           setConnectionState('idle');
+        } else if (message.type === 'error') {
+          // Authentication and validation failures are shown instead of silence.
+          setError(
+            /authentication|seat/i.test(message.message)
+              ? 'اتصال شما تأیید نشد. از طریق میزبان بازی وارد شوید.'
+              : message.message || 'خطای نامشخص در بازی.'
+          );
+          setConnectionState('idle');
         } else if (message.type === 'game_info') {
           setGameInfo(message);
           // Update player info from porteghal-provided metadata
@@ -168,7 +180,7 @@ export function useMenschSocket() {
       setConnectionHealth('disconnected');
       setConnectionState((prev) => (prev === 'finished' ? 'finished' : 'idle'));
     };
-  }, [wsBaseUrl, disconnectAll, clearDiceTimeout]);
+  }, [wsBaseUrl, disconnectAll, clearDiceTimeout, externalToken]);
 
   useEffect(() => {
     if (directRoomId && externalPlayerId) {
@@ -193,6 +205,7 @@ export function useMenschSocket() {
       playerCount: playerCount.toString(),
       piecesCount: piecesCount.toString()
     });
+    if (externalToken) params.set('token', externalToken);
 
     const wsUrl = `${wsBaseUrl}/ws/queue?${params.toString()}`;
     const ws = new WebSocket(wsUrl);
@@ -210,6 +223,15 @@ export function useMenschSocket() {
           setConnectionState('idle');
           queueSocketRef.current = null;
           ws.close();
+        } else if (message.type === 'error') {
+          setError(
+            /authentication/i.test(message.message)
+              ? 'ورود شما به صف تأیید نشد. از طریق میزبان بازی وارد شوید.'
+              : message.message || 'خطای نامشخص در صف بازی.'
+          );
+          setConnectionState('idle');
+          queueSocketRef.current = null;
+          ws.close();
         }
       } catch (err) {
         console.error('Failed to parse queue WebSocket message:', err);
@@ -222,7 +244,7 @@ export function useMenschSocket() {
     ws.onclose = () => {
       setConnectionState((prev) => (prev === 'queue_waiting' ? 'idle' : prev));
     };
-  }, [playerId, wsBaseUrl, connectToRoom, disconnectAll]);
+  }, [disconnectAll, externalToken, playerId, wsBaseUrl, connectToRoom]);
 
   const sendAction = useCallback((actionPayload: ClientAction) => {
     if (roomSocketRef.current && roomSocketRef.current.readyState === WebSocket.OPEN) {
