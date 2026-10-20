@@ -12,6 +12,7 @@ import { DevControl } from './components/DevControl';
 import { DisconnectOverlay } from './components/DisconnectOverlay';
 import { GameOverModal } from './components/GameOverModal';
 import { OwnConnectionOverlay } from './components/OwnConnectionOverlay';
+import { RoomWaitTimeout } from './components/RoomWaitTimeout';
 import { getQueryParams } from './utils/bridge';
 
 export function App() {
@@ -36,9 +37,17 @@ export function App() {
         passTurn,
         sendChatMessage,
         connectionHealth,
+        roomTimedOut,
       } = useMenschSocket();
 
   const renderGameContent = () => {
+    // A direct-link room whose wait expired has its own screen: the socket
+    // closed on purpose, so the connection overlay would be misleading
+    // (issue #60).
+    if (isDirectMode && roomTimedOut && !gameState) {
+      return <RoomWaitTimeout />;
+    }
+
     // Dev-only board helper page: ?dev=1&roomId=<room_id>
     if (queryParams.dev === '1') {
       return <DevControl />;

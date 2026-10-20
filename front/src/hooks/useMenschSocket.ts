@@ -8,6 +8,12 @@ import { GameState, ServerMessage, ClientAction, GameInfoMessage } from '../type
 import { sendToParent, getQueryParams, getWsBaseUrl } from '../utils/bridge';
 import { createPlayerId } from '../utils/playerIdentity';
 import type { ConnectionHealth } from '../components/OwnConnectionOverlay';
+import {
+  ROOM_TIMEOUT_MESSAGE,
+  healthAfterSocketDrop,
+  isRoomWaitOver,
+  type RoomEndReason,
+} from '../utils/roomEnd';
 
 // Connection state types for tracking the exact network status.
 export type SocketConnectionState =
@@ -52,6 +58,11 @@ export function useMenschSocket() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [gameInfo, setGameInfo] = useState<GameInfoMessage | null>(null);
   const [connectionHealth, setConnectionHealth] = useState<ConnectionHealth>('stable');
+  // How the room ended, when it ended on purpose: the socket close that
+  // follows a `room_timeout` is not a connection loss (issue #60). The ref
+  // is the synchronous copy the socket handlers read.
+  const [roomEndReason, setRoomEndReason] = useState<RoomEndReason>('none');
+  const roomEndRef = useRef<RoomEndReason>('none');
 
   const queueSocketRef = useRef<WebSocket | null>(null);
   const roomSocketRef = useRef<WebSocket | null>(null);
@@ -103,6 +114,9 @@ export function useMenschSocket() {
     disconnectAll();
     reconnectAttemptedRef.current = false;
 
+    roomEndRef.current = 'none';
+    setRoomEndReason('none');
+
     const roomParams = new URLSearchParams({ playerId: pId, playerName: pName });
     if (externalToken) roomParams.set('token', externalToken);
     const wsUrl = `${wsBaseUrl}/ws/room/${rId}?${roomParams.toString()}`;
@@ -144,10 +158,17 @@ export function useMenschSocket() {
           // The roster is still incomplete; the room cancels itself on timeout.
           setConnectionState('connecting_room');
         } else if (message.type === 'room_timeout') {
-          setError('زمان انتظار برای تکمیل بازیکنان به پایان رسید.');
+          // The server cancelled the room on purpose: the wait expired, the
+          // connection did not fail. A direct-link room shows its own screen,
+          // so this is not the generic error toast.
+          roomEndRef.current = 'timeout';
+          setRoomEndReason('timeout');
           setConnectionState('idle');
+          if (!directRoomId) setError(ROOM_TIMEOUT_MESSAGE);
         } else if (message.type === 'error') {
           // Authentication and validation failures are shown instead of silence.
+          roomEndRef.current = 'rejected';
+          setRoomEndReason('rejected');
           setError(
             /authentication|seat/i.test(message.message)
               ? 'اتصال شما تأیید نشد. از طریق میزبان بازی وارد شوید.'
@@ -177,10 +198,13 @@ export function useMenschSocket() {
     };
 
     ws.onclose = () => {
-      setConnectionHealth('disconnected');
+      // A socket that a reconnect replaced is not a connection loss, and a
+      // room that ended on purpose keeps its own message (issue #60).
+      if (roomSocketRef.current !== ws) return;
+      setConnectionHealth(healthAfterSocketDrop(roomEndRef.current));
       setConnectionState((prev) => (prev === 'finished' ? 'finished' : 'idle'));
     };
-  }, [wsBaseUrl, disconnectAll, clearDiceTimeout, externalToken]);
+  }, [wsBaseUrl, disconnectAll, clearDiceTimeout, externalToken, directRoomId]);
 
   useEffect(() => {
     if (directRoomId && externalPlayerId) {
@@ -195,6 +219,8 @@ export function useMenschSocket() {
     setPlayerName(name);
     setPlayerAvatar(avatar);
     setConnectionState('connecting_queue');
+    roomEndRef.current = 'none';
+    setRoomEndReason('none');
     setError(null);
     disconnectAll();
 
@@ -270,6 +296,8 @@ export function useMenschSocket() {
   const nextRound = useCallback(() => sendAction({ action: 'next_round' }), [sendAction]);
   const passTurn = useCallback(() => sendAction({ action: 'pass_turn' }), [sendAction]);
   const leaveGame = useCallback(() => {
+    roomEndRef.current = 'left';
+    setRoomEndReason('left');
     disconnectAll();
     setGameState(null);
     setConnectionState('idle');
@@ -313,7 +341,7 @@ export function useMenschSocket() {
       setConnectionHealth('stable');
     };
     const handleOffline = () => {
-      setConnectionHealth('disconnected');
+      setConnectionHealth(healthAfterSocketDrop(roomEndRef.current));
     };
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
@@ -326,6 +354,8 @@ export function useMenschSocket() {
   // Periodic 15s health check: detect stale sockets
   useEffect(() => {
     const interval = setInterval(() => {
+      // The room already ended on purpose: do not probe or reconnect.
+      if (roomEndRef.current !== 'none') return;
       const sock = roomSocketRef.current;
       if (connectionState === 'playing') {
         if (!sock || sock.readyState !== WebSocket.OPEN) {
@@ -371,5 +401,7 @@ export function useMenschSocket() {
     directRoomId,
     gameInfo,
     connectionHealth,
+    // True while the dedicated wait-expired screen owns the UI.
+    roomTimedOut: isRoomWaitOver(roomEndReason),
   };
 }
