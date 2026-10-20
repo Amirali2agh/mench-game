@@ -1,4 +1,8 @@
+import logging
+
 from fastapi import WebSocket
+
+logger = logging.getLogger(__name__)
 
 class QueueManager:
     """
@@ -46,8 +50,12 @@ class QueueManager:
             try:
                 await websocket.send_json(payload)
             except Exception:
-                # Handle potential connection drops gracefully
-                pass
+                # The socket is gone; drop it so a later match does not keep
+                # retrying a dead connection.
+                logger.warning(
+                    "Match notification to %s failed", player_id, exc_info=True
+                )
+                self.disconnect(player_id)
 
 # Global single instance of QueueManager to be imported and used across routers/services
 queue_manager = QueueManager()

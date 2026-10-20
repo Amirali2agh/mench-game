@@ -1,6 +1,6 @@
+from dataclasses import dataclass
 import json
 import random
-import asyncio
 from app.redis_client import redis_client
 from app.services.board_layout import (
     TRACK_LENGTH,
@@ -12,6 +12,14 @@ from app.utils.room_lock import room_lock
 
 HOME_START_POSITION = 40
 HOME_END_POSITION = 43
+
+@dataclass(frozen=True)
+class RollResult:
+    """New state after a roll plus whether the turn auto-advances."""
+
+    state: dict
+    auto_pass: bool
+
 
 class GameService:
     """
@@ -91,7 +99,7 @@ class GameService:
         await redis_client.set(RedisKeys.room_state(room_id), json.dumps(state), ex=7200)
 
     @staticmethod
-    async def roll_dice(room_id: str, player_id: str) -> dict:
+    async def roll_dice(room_id: str, player_id: str) -> RollResult:
         async with room_lock(room_id):
             state = await GameService.get_game(room_id)
             if not state:
@@ -129,45 +137,32 @@ class GameService:
 
             await GameService.save_game(room_id, state)
 
-        if pass_turn:
-            # The animation wait happens outside the lock on purpose.
-            return await GameService._animate_and_pass_turn(room_id, state)
-        return state
+        # The turn advance is scheduled by the transport layer after the dice
+        # animation; the engine only reports whether it is due.
+        return RollResult(state=state, auto_pass=pass_turn)
 
     @staticmethod
-    async def _animate_and_pass_turn(room_id: str, state: dict) -> dict:
+    async def advance_after_roll(room_id: str, rolled_state: dict) -> dict | None:
         """
-        Broadcast the roll, wait for the client animation, then advance the turn.
+        Hand the turn on after the dice animation, unless another action did.
 
-        The wait runs outside the room lock; the check-and-rotate after the wait
-        runs inside it, so a pass_turn (or any other action) that landed during
-        the animation can never rotate the turn twice.
+        The check-and-rotate runs under the room lock, so a pass_turn that
+        landed during the animation can never rotate the turn twice.
         """
-        # Local import to avoid a circular import at module load time.
-        try:
-            from app.managers.room_manager import room_manager
-        except ImportError:
-            room_manager = None
-
-        if room_manager:
-            await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
-
-        await asyncio.sleep(2)
-
         async with room_lock(room_id):
             latest_state = await GameService.get_game(room_id)
-            if latest_state and (
-                latest_state["current_turn"] != state["current_turn"]
+            if latest_state is None:
+                # The room was cancelled or expired; nothing to advance.
+                return None
+            if (
+                latest_state["current_turn"] != rolled_state["current_turn"]
                 or not latest_state["dice_rolled"]
             ):
-                # Someone already ended this turn while the dice was shown.
+                # Another action already ended this turn.
                 return latest_state
-            rotated = GameService._rotate_turn(latest_state or state)
+            rotated = GameService._rotate_turn(latest_state or rolled_state)
             await GameService.save_game(room_id, rotated)
-
-        if room_manager:
-            await room_manager.broadcast(room_id, {"type": "sync_state", "game": rotated})
-        return rotated
+            return rotated
 
     @staticmethod
     async def move_piece(
