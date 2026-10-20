@@ -24,15 +24,56 @@ docker compose up --build
 
 ---
 
-## 2. Matchmaking — `/ws/queue`
+## 2. Authentication
+
+No endpoint trusts a client-supplied identity. A trusted backend (Porteghal)
+mints a short-lived token for each player; the WebView passes it in the query
+string and the server derives `player_id` from it.
 
 ```
-ws://localhost:8000/ws/queue?playerId=p1&playerName=Ali&playerCount=2&piecesCount=4
+ws://localhost:8000/ws/room/{room_id}?token={token}
+```
+
+Tokens are an HS256-style HMAC over a compact JSON payload
+(`{"sub": player_id, "room": room_id?, "exp": unix_seconds}`), encoded as
+`base64url(payload).base64url(signature)`:
+
+* The secret is `GAME_TOKEN_SECRET`, falling back to `PORTEGHAL_API_KEY`.
+  Without either, production refuses to mint or verify tokens.
+* A room token is only accepted for that room; a token minted without a room is
+  only accepted by `/ws/queue`. Tokens cannot be replayed across surfaces.
+* `TOKEN_TTL_SECONDS` (3600) bounds the validity, so a lost token ages out.
+
+| Surface | Credential |
+| --- | --- |
+| `POST /api/rooms`, `POST /api/rooms/{room_id}/join`, `POST /api/auth/token` | `X-API-Key` header (the shared secret) |
+| `GET /api/rooms/{room_id}` | `X-API-Key`, or `?token=` of a seated player |
+| `/ws/room/{room_id}`, `/ws/queue`, `/ws/game/{room_id}/{player_num}` | `?token=` |
+
+`POST /api/rooms` answers with `player_tokens` (one token per seated player)
+and `POST /api/rooms/{room_id}/join` answers with `token`, so the backend can
+hand both players their credential when it opens the WebView. `POST
+/api/auth/token` covers matchmaking, where no room exists yet.
+
+Connections without a valid token are accepted, sent
+`{"type": "error", "message": "Authentication failed: …"}` and closed with code
+`1008`. A room socket also rejects a player the room document does not seat.
+
+With `DEBUG=true` (local development only) a missing token falls back to the
+`playerId` query parameter and rooms auto-seat unknown players.
+
+---
+
+## 3. Matchmaking — `/ws/queue`
+
+```
+ws://localhost:8000/ws/queue?token={token}&playerCount=2&piecesCount=4
 ```
 
 | Param | Type | Required | Default | Purpose |
 | --- | --- | --- | --- | --- |
-| `playerId` | string | yes | – | Stable player identifier |
+| `token` | string | yes* | – | Signed identity; `player_id` comes from it |
+| `playerId` | string | no | – | *DEBUG only:* identity when no token is sent |
 | `playerName` | string | yes | – | Display name (Persian supported) |
 | `playerAvatarUrl` | string | no | `""` | Avatar URL stored with the profile |
 | `playerCount` | int | no | `2` | `2` or `4` seats |
@@ -42,7 +83,7 @@ The queue key is derived from both counts, so a 2×4 queue never mixes with a
 4×2 queue. Joining twice with the same `playerId` is de-duplicated. On disconnect
 or timeout the player is removed from that queue.
 
-### 2.1 Match found
+### 3.1 Match found
 
 When the queue reaches `playerCount`, the server seats the matched players in a
 new room and notifies each of them. The player whose connection completed the
@@ -65,9 +106,9 @@ their per-player Redis inbox, so workers do not need to share memory.
 with, not the client's requested default.
 
 The client should close the queue socket and open
-`/ws/room/{room_id}?playerId=…&playerName=…`.
+`/ws/room/{room_id}?token=…` with the token it was given.
 
-### 2.2 Queue timeout
+### 3.2 Queue timeout
 
 After `MATCHMAKING_TIMEOUT` seconds without a match the player is removed from
 the queue and receives:
@@ -80,21 +121,22 @@ The client returns to the lobby and may rejoin.
 
 ---
 
-## 3. Game room — `/ws/room/{room_id}`
+## 4. Game room — `/ws/room/{room_id}`
 
 ```
-ws://localhost:8000/ws/room/{room_id}?playerId=p1&playerName=Ali
+ws://localhost:8000/ws/room/{room_id}?token={token}
 ```
 
 | Param | Type | Required | Purpose |
 | --- | --- | --- | --- |
-| `playerId` | string | yes | Identity used for seating and turn ownership |
-| `playerName` | string | yes | Fallback display name |
+| `token` | string | yes* | Signed identity; the player must already be seated in the room |
+| `playerId` | string | no | *DEBUG only:* identity when no token is sent |
+| `playerName` | string | no | Fallback display name in DEBUG mode |
 
 The display name is resolved from the stored profile (`player:{id}:meta`) when
 one exists; the query parameter is only a fallback.
 
-### 3.1 Initial sync
+### 4.1 Initial sync
 
 On connect (and after every mutation) the server broadcasts the full state to
 everyone in the room:
@@ -136,7 +178,7 @@ everyone in the room:
 * `status` is `playing` or `finished`. `winner_id` is set only when finished.
 * `eliminated_players` lists seats that forfeited; turn rotation skips them.
 
-### 3.2 Waiting for players
+### 4.2 Waiting for players
 
 A room only starts a match when its configured roster is complete. Until then
 every connected client receives:
@@ -163,12 +205,12 @@ four-seat geometry.
 
 ---
 
-## 4. Client actions (client → server)
+## 5. Client actions (client → server)
 
 All actions are JSON text frames. Unknown or malformed payloads receive an
 `error` message and the connection stays open.
 
-### 4.1 Roll the dice
+### 5.1 Roll the dice
 
 ```json
 { "action": "roll_dice" }
@@ -178,7 +220,7 @@ Only the active player may roll, and only once per turn. When the roll leaves
 the player with no legal move, the server broadcasts the roll and advances the
 turn automatically after a short delay so the client can animate it.
 
-### 4.2 Move a piece
+### 5.2 Move a piece
 
 ```json
 { "action": "move_piece", "piece_index": 0 }
@@ -188,7 +230,7 @@ turn automatically after a short delay so the client can animate it.
 travel the rolled distance, when it would leave the board, or when it would land
 on a home cell occupied by the same player's other piece.
 
-### 4.3 Rematch
+### 5.3 Rematch
 
 ```json
 { "action": "next_round" }
@@ -201,7 +243,7 @@ room settings (`pieces_count`, `player_count`, `coin_bet`), clears pending
 disconnect timers, and releases the one-shot winner-report claim so the new match
 reports its own winner.
 
-### 4.4 Pass the turn
+### 5.4 Pass the turn
 
 ```json
 { "action": "pass_turn" }
@@ -212,7 +254,7 @@ accepts it only from the active player, and only when that player has no legal
 move; otherwise it answers
 `{"type": "error", "message": "You still have a legal move"}`.
 
-### 4.5 Chat
+### 5.5 Chat
 
 ```json
 { "action": "chat", "message": "سلام" }
@@ -231,7 +273,7 @@ The server rebroadcasts it to the room as:
 
 ---
 
-## 5. Board mapping and movement
+## 6. Board mapping and movement
 
 Relative coordinates used in `pieces`:
 
@@ -261,7 +303,7 @@ A piece's absolute cell is `(track_offsets[seat] + relative_position) % 40`.
 The resolved per-seat values are always sent as `track_offsets` in `sync_state`,
 so clients never re-implement this table.
 
-### 5.1 Client mapping
+### 6.1 Client mapping
 
 `front/src/utils/boardCoordinates.ts` is the single source of truth on the
 client. It holds the same corner table plus the 40-cell track, the derived start
@@ -275,7 +317,7 @@ fails if the client table drifts from `app/services/board_layout.py`.
 
 ---
 
-## 6. Disconnect, reconnect and forfeit
+## 7. Disconnect, reconnect and forfeit
 
 1. A WebSocket close starts the forfeit timer for that player
    (`DISCONNECT_TIMEOUT`, 60 seconds by default).
@@ -294,9 +336,9 @@ reconnect) are no-ops. A rematch removes that claim.
 
 ---
 
-## 7. REST payload rules
+## 8. REST payload rules
 
-### 7.1 `POST /api/rooms`
+### 8.1 `POST /api/rooms`
 
 ```json
 {
@@ -322,12 +364,16 @@ reconnect) are no-ops. A rematch removes that claim.
 Anything else is rejected with `422`. The game starts immediately when the
 roster is already complete (for example when both players are supplied).
 
-### 7.2 `GET /api/rooms/{room_id}`
+Requires `X-API-Key`. The response adds `player_tokens`: a signed token per
+seated player, which the WebView must present on its sockets.
+
+### 8.2 `GET /api/rooms/{room_id}`
 
 Returns the room document (`room_id`, both player profiles, `status`,
-`coin_bet`), or `404`.
+`coin_bet`), or `404`. Requires `X-API-Key`, or a `?token=` belonging to a
+player seated in the room (`403` otherwise).
 
-### 7.3 `POST /api/rooms/{room_id}/join`
+### 8.3 `POST /api/rooms/{room_id}/join`
 
 ```json
 { "player_id": "p2", "player_name": "رضا", "player_avatar": "" }
@@ -335,15 +381,27 @@ Returns the room document (`room_id`, both player profiles, `status`,
 
 Seats the player in the first free slot and starts the match when the roster
 becomes complete. Rejoining a seat the player already owns is an idempotent
-no-op. `404` when the room is unknown, `400` when it is full or no longer
+no-op. Requires `X-API-Key`; the response carries the player's `token`.
+`404` when the room is unknown, `400` when it is full or no longer
 accepting players, and `422` for an invalid `player_id`.
+
+### 8.4 `POST /api/auth/token`
+
+```json
+{ "player_id": "p1", "room_id": "" }
+```
+
+Mints a token for a player that has no room yet (matchmaking). Answers
+`{"token": "…", "player_id": "p1", "expires_in": 3600}`; requires `X-API-Key`.
+Omit `room_id` for queue tokens — a room-bound token is rejected by
+`/ws/queue`.
 
 The room document (`room:{room_id}:meta`) is the single source of truth for
 `player_count`, `pieces_count` and `coin_bet`; no side keys are written.
 
 ---
 
-## 8. Redis keys and TTLs
+## 9. Redis keys and TTLs
 
 | Key | Type | Written by | TTL |
 | --- | --- | --- | --- |
@@ -360,7 +418,7 @@ mutation rewrites the whole document.
 
 ---
 
-## 9. Error messages
+## 10. Error messages
 
 Errors are sent as `{"type": "error", "message": "…"}`. The message text is
 English and stable; the client maps known messages to Persian UI copy.
@@ -384,10 +442,12 @@ English and stable; the client maps known messages to Persian UI copy.
 | `Room is full` | Join on a complete room |
 | `Room is no longer accepting players` | Join after the match started |
 | `Room not found` | Unknown room id |
+| `Authentication failed: …` | Missing, expired, forged or wrong-room token; the socket is closed with `1008` |
+| `Player is not seated in this room` | The token's player is not in the room document |
 
 ---
 
-## 10. Development endpoints
+## 11. Development endpoints
 
 Mounted **only** when `DEBUG=true`; with the default `DEBUG=false` the router is
 not registered at all, so every `/api/dev/*` path answers `404`.
