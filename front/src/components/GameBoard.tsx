@@ -34,6 +34,7 @@ import {
   pieceTransform,
   stackOffset,
 } from "../utils/pieceMotion";
+import { canMovePiece } from "../utils/movement";
 import type { ChatMessage } from "../hooks/useMenschSocket";
 
 interface GameBoardProps {
@@ -362,23 +363,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   const isPieceMovable = useCallback(
     (pieceIdx: number): boolean => {
       if (!isMyTurn || !gameState?.dice_rolled) return false;
-      const myPieces = pieces[localPlayerId] || [];
-      const currentPos = myPieces[pieceIdx];
-      if (currentPos === undefined) return false;
-      if (currentPos === -1 && localDice !== 6) return false;
-      if (localDice && currentPos !== -1) {
-        const targetPos = currentPos + localDice;
-        if (targetPos > 43) return false;
-        if (
-          targetPos >= 40 &&
-          myPieces.some(
-            (position, index) => index !== pieceIdx && position === targetPos,
-          )
-        ) {
-          return false;
-        }
-      }
-      return true;
+      // The rules live in utils/movement.ts next to the test that mirrors the
+      // engine, so the board cannot drift from the backend's legality checks.
+      return canMovePiece(pieces[localPlayerId] || [], pieceIdx, localDice);
     },
     [gameState?.dice_rolled, isMyTurn, localDice, localPlayerId, pieces],
   );
