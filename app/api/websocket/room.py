@@ -9,6 +9,14 @@ from app.redis_client import redis_client
 from app.services.prize_service import report_winner, update_room_status
 from app.api.security import reject_websocket, resolve_websocket_player
 from app.services.auth import AuthError, verify_player_token
+from app.utils.identifiers import is_valid_player_id, is_valid_room_id
+from app.utils.limits import (
+    MAX_CHAT_CHARS,
+    MAX_FRAME_BYTES,
+    MAX_PLAYER_NAME_CHARS,
+    TokenBucket,
+    sanitize_text,
+)
 from app.utils.room_lock import room_lock
 
 logger = logging.getLogger(__name__)
@@ -99,9 +107,23 @@ async def handle_gameplay_loop(
     """
     Shared gameplay message loop used by both WebSocket endpoints.
     Handles roll_dice, move_piece, next_round, restart_game, chat and pass_turn.
+
+    Frames are size-capped and rate-limited per connection so one client cannot
+    flood the room or the broadcast fan-out. The chat author is the profile
+    resolved at connection time, never the name in the frame.
     """
+    bucket = TokenBucket()
+    sender_name = sanitize_text(player_name, MAX_PLAYER_NAME_CHARS) or "بازیکن"
+
     while True:
         data = await websocket.receive_text()
+
+        if len(data.encode("utf-8")) > MAX_FRAME_BYTES:
+            await websocket.send_json({"type": "error", "message": "Message too large"})
+            continue
+        if not bucket.consume():
+            await websocket.send_json({"type": "error", "message": "Too many actions"})
+            continue
 
         try:
             message = json.loads(data)
@@ -134,8 +156,7 @@ async def handle_gameplay_loop(
                 await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
 
             elif action == "chat":
-                chat_text = message.get("message", "").strip()
-                sender_name = message.get("playerName", player_name)
+                chat_text = sanitize_text(message.get("message"), MAX_CHAT_CHARS)
                 if chat_text:
                     await room_manager.broadcast(room_id, {
                         "type": "chat",
@@ -240,6 +261,10 @@ async def websocket_room_endpoint(
     DEBUG dev flow. The complete roster is persisted in Redis; the game starts
     as soon as every configured seat is filled.
     """
+    if not is_valid_room_id(room_id):
+        await reject_websocket(websocket, "Invalid room id")
+        return
+
     player_id = await resolve_websocket_player(
         websocket, room_id=room_id, token=token, player_id=playerId
     )
@@ -257,7 +282,9 @@ async def websocket_room_endpoint(
             return
 
         await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
-        await handle_gameplay_loop(websocket, room_id, player_id, playerName)
+        await handle_gameplay_loop(
+            websocket, room_id, player_id, player.get("name") or playerName
+        )
 
     except WebSocketDisconnect:
         room_manager.disconnect(room_id, player_id, websocket)
@@ -280,6 +307,10 @@ async def websocket_game_endpoint(
     The seat is named by the path segment, but the identity still has to be
     proven: the token must belong to the player stored for that seat.
     """
+    if not is_valid_room_id(room_id) or player_num not in ("1", "2", "3", "4"):
+        await reject_websocket(websocket, "Invalid room or seat")
+        return
+
     room_meta = await RoomService.get_room(room_id)
 
     if room_meta:
@@ -298,6 +329,11 @@ async def websocket_game_endpoint(
             player_id = verify_player_token(token, room_id=room_id)
         except AuthError as exc:
             await reject_websocket(websocket, f"Authentication failed: {exc}")
+            return
+        if not is_valid_player_id(player_id):
+            await reject_websocket(
+                websocket, "Authentication failed: invalid player id"
+            )
             return
         if room_meta and seat_id != player_id:
             await reject_websocket(
@@ -330,7 +366,9 @@ async def websocket_game_endpoint(
             return
 
         await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
-        await handle_gameplay_loop(websocket, room_id, player_id, player_name)
+        await handle_gameplay_loop(
+            websocket, room_id, player_id, player.get("name") or player_name
+        )
 
     except WebSocketDisconnect:
         room_manager.disconnect(room_id, player_id, websocket)

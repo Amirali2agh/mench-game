@@ -6,6 +6,7 @@ from app.config import settings
 from app.managers.queue_manager import queue_manager
 from app.services.queue_service import QueueService
 from app.redis_client import redis_client
+from app.utils.limits import MAX_FRAME_BYTES, MAX_PLAYER_NAME_CHARS, TokenBucket, sanitize_text
 from app.utils.redis_keys import RedisKeys
 
 router = APIRouter()
@@ -101,13 +102,16 @@ async def websocket_queue_endpoint(
     if player_id is None:
         return
 
+    display_name = sanitize_text(playerName, MAX_PLAYER_NAME_CHARS) or "بازیکن"
+    bucket = TokenBucket()
+
     await queue_manager.connect(player_id, websocket)
     match_watch_task = None
 
     try:
         match_result = await QueueService.add_to_queue(
             player_id=player_id,
-            player_name=playerName,
+            player_name=display_name,
             avatar_url=playerAvatarUrl,
             target_players=playerCount,
             pieces_count=piecesCount,
@@ -131,7 +135,12 @@ async def websocket_queue_endpoint(
             )
 
         while True:
-            await websocket.receive_text()
+            data = await websocket.receive_text()
+            if len(data.encode("utf-8")) > MAX_FRAME_BYTES:
+                await websocket.send_json({"type": "error", "message": "Message too large"})
+                continue
+            if not bucket.consume():
+                await websocket.send_json({"type": "error", "message": "Too many actions"})
 
     except WebSocketDisconnect:
         queue_manager.disconnect(player_id)

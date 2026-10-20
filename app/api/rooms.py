@@ -2,19 +2,19 @@ import json
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel, Field, field_validator
 from app.api.security import require_api_key, require_room_access
 from app.redis_client import redis_client
 from app.services import room_service as RoomService
 from app.services.auth import TOKEN_TTL_SECONDS, issue_player_token
+from app.utils.identifiers import (
+    OPTIONAL_ROOM_ID_PATTERN,
+    PLAYER_ID_PATTERN,
+    ROOM_ID_PATTERN,
+)
 
 router = APIRouter(prefix="/api")
-
-#: Player identifiers end up in Redis keys and URLs, so they stay conservative.
-#: Room identifiers are even stricter because they are also part of the URL path.
-PLAYER_ID_PATTERN = r"^[A-Za-z0-9_.-]{1,64}$"
-ROOM_ID_PATTERN = r"^$|^[A-Za-z0-9_-]{1,64}$"
 
 #: Board sizes the engine supports: a two- or four-seat board with 2-4 pieces.
 PlayerCount = Literal[2, 4]
@@ -24,7 +24,7 @@ PiecesCount = Literal[2, 3, 4]
 class CreateRoomRequest(BaseModel):
     """Room settings sent by Porteghal when it opens a match directly."""
 
-    room_id: str = Field(default="", max_length=64, pattern=ROOM_ID_PATTERN)
+    room_id: str = Field(default="", max_length=64, pattern=OPTIONAL_ROOM_ID_PATTERN)
     player1_id: str = Field(..., pattern=PLAYER_ID_PATTERN)
     player1_name: str = Field(default="", max_length=64)
     player1_avatar: str = Field(default="", max_length=512)
@@ -125,7 +125,9 @@ async def create_room(req: CreateRoomRequest):
     response_model=RoomJoinResponse,
     dependencies=[Depends(require_room_access)],
 )
-async def get_room(room_id: str):
+async def get_room(
+    room_id: str = Path(..., pattern=ROOM_ID_PATTERN),
+):
     room = await RoomService.get_room(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
@@ -151,7 +153,10 @@ async def get_room(room_id: str):
     "/rooms/{room_id}/join",
     dependencies=[Depends(require_api_key)],
 )
-async def join_room(room_id: str, req: JoinRoomRequest):
+async def join_room(
+    req: JoinRoomRequest,
+    room_id: str = Path(..., pattern=ROOM_ID_PATTERN),
+):
     room = await RoomService.get_room(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
