@@ -16,6 +16,7 @@ from fastapi import Header, HTTPException, Query, WebSocket
 
 from app.config import settings
 from app.services.auth import AuthError, verify_player_token
+from app.utils.identifiers import is_valid_player_id
 
 
 def api_key_matches(provided: str | None) -> bool:
@@ -81,8 +82,13 @@ async def resolve_websocket_player(
     """
     try:
         if token:
-            return verify_player_token(token, room_id=room_id)
+            resolved = verify_player_token(token, room_id=room_id)
+            if not is_valid_player_id(resolved):
+                raise AuthError("invalid player id")
+            return resolved
         if settings.DEBUG and player_id:
+            if not is_valid_player_id(player_id):
+                raise AuthError("invalid player id")
             return player_id
         raise AuthError("a token is required")
     except AuthError as exc:

@@ -14,6 +14,7 @@ import json
 import time
 
 from app.config import settings
+from app.utils.identifiers import is_valid_player_id
 
 #: Lifetime of a token in seconds. Long enough for a match plus reconnects.
 TOKEN_TTL_SECONDS = 3600
@@ -56,6 +57,8 @@ def issue_player_token(
     now: float | None = None,
 ) -> str:
     """Mint a token binding ``player_id`` (and optionally a room) for ``ttl``."""
+    if not is_valid_player_id(player_id):
+        raise AuthError("invalid player id")
     issued_at = time.time() if now is None else now
     payload: dict[str, object] = {"sub": player_id, "exp": int(issued_at + ttl)}
     if room_id:

@@ -271,6 +271,10 @@ The server rebroadcasts it to the room as:
 }
 ```
 
+The author is the profile stored at connection time; a `playerName` in the
+frame is ignored, so a client cannot post as someone else. Control characters
+are stripped and the text is cut to 200 characters (see section 11).
+
 ---
 
 ## 6. Board mapping and movement
@@ -444,10 +448,34 @@ English and stable; the client maps known messages to Persian UI copy.
 | `Room not found` | Unknown room id |
 | `Authentication failed: …` | Missing, expired, forged or wrong-room token; the socket is closed with `1008` |
 | `Player is not seated in this room` | The token's player is not in the room document |
+| `Message too large` | Frame above 4096 UTF-8 bytes; ignored |
+| `Too many actions` | The socket's 10 actions/second budget is spent |
+| `Invalid room id` | A socket path room id outside the allowlist |
+| `Invalid room or seat` | `/ws/game` room id or seat number outside the allowlist |
 
 ---
 
-## 11. Development endpoints
+## 11. Input limits
+
+Every frame is capped at 4096 UTF-8 bytes and each socket owns a token bucket
+of 10 actions per second (burst 10). Oversized or over-budget frames are
+answered with an error and skipped; the socket stays open.
+
+Identifiers are checked at every entry point — REST path and body, token
+subject, query string — before they can reach a Redis key, so a value such as
+`x:room:other` cannot address another key:
+
+| Id | Pattern |
+| --- | --- |
+| player | `^[A-Za-z0-9_.-]{1,64}$` |
+| room | `^[A-Za-z0-9_-]{1,64}$` |
+
+Chat text is stripped of control characters and truncated to 200 characters;
+the client keeps the newest 50 messages.
+
+---
+
+## 12. Development endpoints
 
 Mounted **only** when `DEBUG=true`; with the default `DEBUG=false` the router is
 not registered at all, so every `/api/dev/*` path answers `404`.

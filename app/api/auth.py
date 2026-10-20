@@ -8,9 +8,9 @@ the token itself with the shared secret, or call this endpoint with its
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.api.rooms import PLAYER_ID_PATTERN, ROOM_ID_PATTERN
 from app.api.security import require_api_key
 from app.services.auth import TOKEN_TTL_SECONDS, issue_player_token
+from app.utils.identifiers import OPTIONAL_ROOM_ID_PATTERN, PLAYER_ID_PATTERN
 
 router = APIRouter(prefix="/api", tags=["auth"])
 
@@ -19,7 +19,7 @@ class TokenRequest(BaseModel):
     """Identity the backend wants a token for."""
 
     player_id: str = Field(..., pattern=PLAYER_ID_PATTERN)
-    room_id: str = Field(default="", pattern=ROOM_ID_PATTERN)
+    room_id: str = Field(default="", pattern=OPTIONAL_ROOM_ID_PATTERN)
 
 
 class TokenResponse(BaseModel):

@@ -8,6 +8,31 @@ interface BridgeWindow extends Window {
   ReactNativeWebView?: { postMessage?: (message: string) => void };
 }
 
+/** Normalise a host-provided origin; anything but http(s) is ignored. */
+function normalizeOrigin(value: string): string {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? url.origin
+      : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Origin bridge messages may be delivered to.
+ *
+ * A host that embeds the game cross-origin passes `?parentOrigin=https://…`;
+ * otherwise a same-origin embed is assumed. The target is never `"*"`, so an
+ * unrelated page that frames the game cannot read its state.
+ */
+export function getParentTargetOrigin(): string {
+  if (typeof window === "undefined") return "";
+  const configured = normalizeOrigin(getQueryParams().parentOrigin || "");
+  return configured || window.location.origin;
+}
+
 export function sendToParent(
   type: string,
   payload?: Record<string, unknown>,
@@ -23,7 +48,10 @@ export function sendToParent(
   // Standard iframe parent communication, with a console fallback when the
   // game runs standalone.
   if (window.parent && window.parent !== window) {
-    window.parent.postMessage(message, "*");
+    const targetOrigin = getParentTargetOrigin();
+    if (targetOrigin) {
+      window.parent.postMessage(message, targetOrigin);
+    }
   } else {
     console.debug("[Bridge]", message);
   }
