@@ -193,11 +193,14 @@ every connected client receives:
 }
 ```
 
-If the roster is still incomplete after `MATCHMAKING_TIMEOUT` seconds the room
-is cancelled and clients receive:
+The wait window depends on how the room was created. A room the matchmaking
+queue produced keeps `MATCHMAKING_TIMEOUT`; a room opened from a direct link
+uses the longer `ROOM_WAIT_TIMEOUT` (300 s), because a host may need minutes to
+get a friend in. When the window ends the room is cancelled and clients
+receive:
 
 ```json
-{ "type": "room_timeout", "room_id": "abc123", "joined": 2, "required": 4 }
+{ "type": "room_timeout", "room_id": "abc123", "joined": 2, "required": 4, "timeout": 300 }
 ```
 
 A four-player room with two players therefore never starts a two-player match on

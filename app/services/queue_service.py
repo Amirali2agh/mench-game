@@ -2,6 +2,7 @@ import json
 import uuid
 
 from app.redis_client import redis_client
+from app.services import room_service as RoomService
 from app.utils.redis_keys import RedisKeys
 
 #: How long a queue entry and its player marker stay valid.
@@ -174,6 +175,9 @@ class QueueService:
                 "pieces_count": pieces_count,
                 "status": "playing",
                 "coin_bet": 0,
+                # A matched room keeps the short queue wait window, unlike a
+                # room opened from a link (issue #60).
+                "source": RoomService.ROOM_SOURCE_MATCHMAKING,
             }),
             ex=ROOM_TTL,
         )

@@ -43,6 +43,7 @@ REDIS_PORT=6379
 REDIS_DB=0
 DISCONNECT_TIMEOUT=60
 MATCHMAKING_TIMEOUT=30
+ROOM_WAIT_TIMEOUT=300
 PORTEGHAL_API_URL=https://<porteghal-host>
 PORTEGHAL_API_KEY=<secret>
 # Signs the short-lived player tokens. Generate with: openssl rand -hex 32

@@ -242,9 +242,13 @@ async def _prepare_room(websocket: WebSocket, room_id: str, player: dict) -> dic
 
     A room only starts once its configured roster is complete. Until then the
     connected players receive ``waiting_for_players``; if the room is still
-    incomplete after ``MATCHMAKING_TIMEOUT`` it is cancelled and a
-    ``room_timeout`` message is broadcast. Returns ``None`` when the game could
-    not be started, in which case the caller closes the connection.
+    incomplete when its wait window ends it is cancelled and a ``room_timeout``
+    message is broadcast. The window depends on how the room was created
+    (`RoomService.wait_timeout`): a matchmaking room keeps the short queue
+    timeout, while a room opened from a link gets the longer
+    ``ROOM_WAIT_TIMEOUT`` so the host can invite a friend. Returns ``None`` when
+    the game could not be started, in which case the caller closes the
+    connection.
     """
     room = await RoomService.get_room(room_id)
     if room is None:
@@ -283,7 +287,8 @@ async def _prepare_room(websocket: WebSocket, room_id: str, player: dict) -> dic
         "players": RoomService.roster(room),
     })
 
-    state = await RoomService.wait_for_game(room_id, settings.MATCHMAKING_TIMEOUT)
+    timeout = RoomService.wait_timeout(room)
+    state = await RoomService.wait_for_game(room_id, timeout)
     if state:
         return state
 
@@ -293,6 +298,8 @@ async def _prepare_room(websocket: WebSocket, room_id: str, player: dict) -> dic
         "room_id": room_id,
         "joined": len(RoomService.roster(room)),
         "required": RoomService.required_players(room),
+        # The window that just expired, so the client can name it.
+        "timeout": timeout,
     })
     return None
 

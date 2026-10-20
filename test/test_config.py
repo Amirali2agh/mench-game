@@ -22,6 +22,9 @@ def test_default_settings():
     assert settings.DISCONNECT_TIMEOUT == 60
     assert settings.MATCHMAKING_TIMEOUT == 30
 
+    # A direct-link room gets its own, longer wait window (issue #60).
+    assert settings.ROOM_WAIT_TIMEOUT == 300
+
     # Player tokens default to the Porteghal shared secret when unset.
     assert settings.GAME_TOKEN_SECRET == ""
 
