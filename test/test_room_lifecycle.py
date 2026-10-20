@@ -1,5 +1,10 @@
-"""Room lifecycle tests: a match only starts with a complete roster (issue #10)."""
+"""Room lifecycle tests: when a match starts and how long a room may wait.
+
+A match only starts with a complete roster (issue #10), and the wait window
+depends on how the room was created (issue #60).
+"""
 import asyncio
+import time
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -63,7 +68,7 @@ def test_two_player_room_starts_immediately_when_both_players_are_known(fake_red
 
 
 def test_incomplete_room_times_out_and_is_cancelled(fake_redis, monkeypatch):
-    monkeypatch.setattr(settings, "MATCHMAKING_TIMEOUT", 0.05)
+    monkeypatch.setattr(settings, "ROOM_WAIT_TIMEOUT", 0.05)
     client = TestClient(api_app)
     created = _create_room(
         client,
@@ -85,14 +90,90 @@ def test_incomplete_room_times_out_and_is_cancelled(fake_redis, monkeypatch):
         assert timed_out["type"] == "room_timeout"
         assert timed_out["joined"] == 2
         assert timed_out["required"] == 4
+        assert timed_out["timeout"] == 0.05
 
     room = asyncio.run(RoomService.get_room(room_id))
     assert room["status"] == RoomService.ROOM_STATUS_CANCELLED
     assert asyncio.run(GameService.get_game(room_id)) is None
 
 
+def test_direct_link_room_waits_for_players_without_the_queue_timeout(
+    fake_redis, monkeypatch
+):
+    """Issue #60: a room opened from a link is not a matchmaking queue entry.
+
+    The queue timeout must not cancel it; the longer room wait applies instead,
+    and the timeout message reports which window was used.
+    """
+    monkeypatch.setattr(settings, "MATCHMAKING_TIMEOUT", 30)
+    monkeypatch.setattr(settings, "ROOM_WAIT_TIMEOUT", 0.05)
+    client = TestClient(api_app)
+    created = _create_room(
+        client,
+        player_count=2,
+        pieces_count=4,
+        player1_id="a",
+        player1_name="A",
+    )
+
+    started = time.monotonic()
+    with client.websocket_connect(
+        f"/ws/room/{created['room_id']}?playerId=a&playerName=A"
+    ) as websocket:
+        assert websocket.receive_json()["type"] == "waiting_for_players"
+        assert websocket.receive_json()["type"] == "room_timeout"
+
+    # The queue timeout (30 s) would still be waiting here.
+    assert time.monotonic() - started < 5
+
+
+def test_matchmaking_room_keeps_the_matchmaking_timeout(fake_redis, monkeypatch):
+    """The room wait must not leak into rooms the queue created."""
+    monkeypatch.setattr(settings, "MATCHMAKING_TIMEOUT", 0.05)
+    monkeypatch.setattr(settings, "ROOM_WAIT_TIMEOUT", 30)
+
+    async def _prepare() -> str:
+        room = RoomService.new_room(
+            "queued-room",
+            player_count=2,
+            pieces_count=4,
+            source=RoomService.ROOM_SOURCE_MATCHMAKING,
+        )
+        await RoomService.save_room("queued-room", room)
+        player = {"id": "a", "name": "A", "avatar": ""}
+        await RoomService.register_player("queued-room", player)
+        return "queued-room"
+
+    room_id = asyncio.run(_prepare())
+    client = TestClient(api_app)
+
+    started = time.monotonic()
+    with client.websocket_connect(
+        f"/ws/room/{room_id}?playerId=a&playerName=A"
+    ) as websocket:
+        assert websocket.receive_json()["type"] == "waiting_for_players"
+        assert websocket.receive_json()["type"] == "room_timeout"
+
+    assert time.monotonic() - started < 5
+
+
+def test_wait_timeout_follows_the_room_source(monkeypatch):
+    monkeypatch.setattr(settings, "MATCHMAKING_TIMEOUT", 30)
+    monkeypatch.setattr(settings, "ROOM_WAIT_TIMEOUT", 300)
+
+    direct = RoomService.new_room("direct-room")
+    queued = RoomService.new_room(
+        "queued-room", source=RoomService.ROOM_SOURCE_MATCHMAKING
+    )
+
+    assert RoomService.wait_timeout(direct) == 300
+    assert RoomService.wait_timeout(queued) == 30
+    # A room document written before the source field existed is a direct room.
+    assert RoomService.wait_timeout({"room_id": "legacy"}) == 300
+
+
 def test_room_starts_when_the_last_player_joins(fake_redis, monkeypatch):
-    monkeypatch.setattr(settings, "MATCHMAKING_TIMEOUT", 5.0)
+    monkeypatch.setattr(settings, "ROOM_WAIT_TIMEOUT", 5.0)
     client = TestClient(api_app)
     created = _create_room(
         client,

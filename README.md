@@ -118,7 +118,8 @@ The backend reads environment variables (and `.env`) through
 | `REDIS_DB` | `0` | Redis database index |
 | `REDIS_PASSWORD` | empty | Redis password, if any |
 | `DISCONNECT_TIMEOUT` | `60` | Seconds a dropped player may take to reconnect before forfeiting |
-| `MATCHMAKING_TIMEOUT` | `30` | Seconds to wait for a match / for a room roster to fill |
+| `MATCHMAKING_TIMEOUT` | `30` | Seconds to wait in the matchmaking queue |
+| `ROOM_WAIT_TIMEOUT` | `300` | Seconds a room opened from a link may wait for its roster to fill |
 | `PORTEGHAL_API_URL` | `http://localhost:8090` | Porteghal base URL for winner reporting |
 | `PORTEGHAL_API_KEY` | empty | Porteghal internal API key. Required for payouts; when empty the service logs an error and skips the call instead of using a fallback |
 | `GAME_TOKEN_SECRET` | empty | HMAC secret for player tokens. Falls back to `PORTEGHAL_API_KEY`; production refuses to mint or verify tokens when neither is set (`DEBUG=true` exempt) |

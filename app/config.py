@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     # تنظیمات قوانین زمانی بازی
     DISCONNECT_TIMEOUT: int = 60  # مدت زمان مجاز قطع اتصال (ثانیه)
     MATCHMAKING_TIMEOUT: int = 30  # مدت زمان انتظار در صف بازی (ثانیه)
+    # مدت زمان انتظار برای تکمیل بازیکنان در اتاق لینک مستقیم (ثانیه).
+    # A room opened from a link is not a queue entry: the matchmaking
+    # timeout must never cancel it while the host waits for a friend.
+    ROOM_WAIT_TIMEOUT: int = 300
     
     # تنظیمات ادغام با Porteghal
     PORTEGHAL_API_URL: str = "http://localhost:8090"

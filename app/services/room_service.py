@@ -8,6 +8,7 @@ never start (and rotate turns) with a partial roster.
 import asyncio
 import json
 
+from app.config import settings
 from app.redis_client import redis_client
 from app.services.game_service import GameService
 from app.utils.room_lock import room_lock
@@ -19,6 +20,12 @@ ROOM_STATUS_WAITING = "waiting"
 ROOM_STATUS_PLAYING = "playing"
 ROOM_STATUS_FINISHED = "finished"
 ROOM_STATUS_CANCELLED = "cancelled"
+
+#: How the room came to exist, which decides how long it may wait for players.
+#: A room opened from a link is not a queue entry, so the matchmaking timeout
+#: must never cancel it (issue #60).
+ROOM_SOURCE_DIRECT = "direct"
+ROOM_SOURCE_MATCHMAKING = "matchmaking"
 
 #: How often a waiting WebSocket checks whether the roster has been completed.
 ROOM_READY_POLL_INTERVAL = 0.25
@@ -36,6 +43,7 @@ def new_room(
     player_count: int = DEFAULT_PLAYER_COUNT,
     pieces_count: int = DEFAULT_PIECES_COUNT,
     coin_bet: int = 0,
+    source: str = ROOM_SOURCE_DIRECT,
 ) -> dict:
     """Build an empty room document; settings live inside the metadata blob."""
     return {
@@ -46,7 +54,20 @@ def new_room(
         "pieces_count": pieces_count,
         "coin_bet": coin_bet,
         "status": ROOM_STATUS_WAITING,
+        "source": source,
     }
+
+
+def wait_timeout(room: dict) -> float:
+    """How long a room without a complete roster may wait, in seconds.
+
+    Rooms the matchmaking queue created keep the short queue window; a room
+    shared as a link gets `ROOM_WAIT_TIMEOUT`, because a host may need minutes to
+    get a friend in. Documents written before `source` existed are direct rooms.
+    """
+    if room.get("source") == ROOM_SOURCE_MATCHMAKING:
+        return settings.MATCHMAKING_TIMEOUT
+    return settings.ROOM_WAIT_TIMEOUT
 
 
 async def get_room(room_id: str) -> dict | None:
