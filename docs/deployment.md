@@ -45,6 +45,8 @@ DISCONNECT_TIMEOUT=60
 MATCHMAKING_TIMEOUT=30
 PORTEGHAL_API_URL=https://<porteghal-host>
 PORTEGHAL_API_KEY=<secret>
+# Signs the short-lived player tokens. Generate with: openssl rand -hex 32
+GAME_TOKEN_SECRET=<secret>
 ALLOWED_CORS_ORIGINS=https://<your-game-host>
 ```
 
@@ -76,6 +78,29 @@ systemctl daemon-reload
 systemctl enable --now mench
 curl -fsS http://127.0.0.1:8002/health
 ```
+
+## 2.1 Player tokens
+
+Every socket needs a signed token; the `playerId` query parameter is only read
+with `DEBUG=true`. Porteghal (or whatever backend opens the WebView) has two
+options, both using the shared secret:
+
+1. Call `POST /api/rooms` with the `X-API-Key` header. The response contains
+   `player_tokens`, one token per seated player; open the WebView at
+   `https://<game-host>/?roomId=<id>&token=<player token>`.
+2. Before matchmaking, call `POST /api/auth/token` with
+   `{"player_id": "…"}` and the same header, then open the WebView with the
+   returned `token`.
+
+Porteghal can also mint the token itself: `base64url(payload).base64url(HMAC-
+SHA256(secret, payload))` where `payload` is compact JSON with `sub`, optional
+`room` and `exp` (unix seconds). Tokens expire after an hour, so the host must
+hand out a fresh one when it opens a match.
+
+The game rejects a tokenless or foreign connection with
+`{"type": "error", "message": "Authentication failed: …"}` and close code
+`1008`; the client shows a Persian message asking the player to enter through
+the host app.
 
 ## 3. Frontend
 
@@ -136,6 +161,12 @@ WebSocket upgrades need no extra configuration in Caddy; nginx needs
 - [ ] `DEBUG=false` (the `/api/dev` cheat endpoints must answer 404).
 - [ ] `PORTEGHAL_API_KEY` is set in the environment; the service logs an error
       and skips payouts when it is missing.
+- [ ] `GAME_TOKEN_SECRET` is set (or `PORTEGHAL_API_KEY` is reused); without
+      it every socket is rejected, because no token can be verified.
+- [ ] The host backend creates rooms with `X-API-Key` and opens the WebView
+      with `?token=…` from `player_tokens` (or calls `POST /api/auth/token`
+      before matchmaking). A URL without a token is refused with close code
+      `1008`.
 - [ ] `ALLOWED_CORS_ORIGINS` is empty (same-origin proxy) or lists the real
       frontend origin; `*` is refused unless `DEBUG=true`.
 - [ ] The frontend was built with the intended `VITE_API_BASE_URL` and

@@ -149,6 +149,15 @@ export interface PlayerPresenceMessage {
   player_id: string;
   player_name?: string;
 }
+
+/**
+ * Generic rejection from the server: validation, authentication or an
+ * invalid action on the current game state.
+ */
+export interface ErrorMessage {
+  type: 'error';
+  message: string;
+}
 export type ServerMessage =
   | MatchFoundMessage
   | SyncStateMessage
@@ -157,7 +166,8 @@ export type ServerMessage =
   | WaitingForPlayersMessage
   | RoomTimeoutMessage
   | ChatMessagePayload
-  | PlayerPresenceMessage;
+  | PlayerPresenceMessage
+  | ErrorMessage;
 
 /**
  * Strongly typed payloads sent from the client to the server via Room WebSocket.

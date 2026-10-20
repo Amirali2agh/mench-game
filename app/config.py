@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     # تنظیمات ادغام با Porteghal
     PORTEGHAL_API_URL: str = "http://localhost:8090"
     PORTEGHAL_API_KEY: str = ""
+    # Secret used to sign the short-lived player tokens the WebView presents on
+    # every socket. Empty falls back to PORTEGHAL_API_KEY; production refuses
+    # to mint or verify tokens when neither is configured (DEBUG is exempt).
+    GAME_TOKEN_SECRET: str = ""
     # Browser origins allowed to call the API. Empty means same-origin only, so
     # the reverse proxy that serves the game needs no CORS at all. The value is
     # a comma-separated allowlist; "*" is refused outside debug mode.

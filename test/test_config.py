@@ -22,6 +22,9 @@ def test_default_settings():
     assert settings.DISCONNECT_TIMEOUT == 60
     assert settings.MATCHMAKING_TIMEOUT == 30
 
+    # Player tokens default to the Porteghal shared secret when unset.
+    assert settings.GAME_TOKEN_SECRET == ""
+
     # Same-origin deployments need no CORS; the default allowlist is empty.
     assert settings.ALLOWED_CORS_ORIGINS == ""
     assert settings.cors_origins == []

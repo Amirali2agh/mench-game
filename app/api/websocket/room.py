@@ -7,6 +7,8 @@ from app.services import room_service as RoomService
 from app.services.game_service import GameService
 from app.redis_client import redis_client
 from app.services.prize_service import report_winner, update_room_status
+from app.api.security import reject_websocket, resolve_websocket_player
+from app.services.auth import AuthError, verify_player_token
 from app.utils.room_lock import room_lock
 
 logger = logging.getLogger(__name__)
@@ -174,8 +176,21 @@ async def _prepare_room(websocket: WebSocket, room_id: str, player: dict) -> dic
     """
     room = await RoomService.get_room(room_id)
     if room is None:
+        if not settings.DEBUG:
+            await websocket.send_json(
+                {"type": "error", "message": "Room not found"}
+            )
+            return None
         room = RoomService.new_room(room_id)
         await RoomService.save_room(room_id, room)
+
+    # Only players the room document already knows about may join. Without
+    # this check any socket could append itself to a live match.
+    if RoomService.seat_of(room, player["id"]) is None and not settings.DEBUG:
+        await websocket.send_json(
+            {"type": "error", "message": "Player is not seated in this room"}
+        )
+        return None
 
     room, _seat, error = await RoomService.register_player(room_id, player)
     if error or room is None:
@@ -214,33 +229,42 @@ async def _prepare_room(websocket: WebSocket, room_id: str, player: dict) -> dic
 async def websocket_room_endpoint(
     websocket: WebSocket,
     room_id: str,
-    playerId: str = Query(...),
-    playerName: str = Query(...)
+    playerId: str = Query(""),
+    playerName: str = Query(""),
+    token: str = Query(""),
 ):
     """
     WebSocket endpoint for active Mensch game rooms.
-    The complete roster is persisted in Redis; the game starts as soon as every
-    configured seat is filled.
+
+    The player id comes from the signed token; ``playerId`` is only read in the
+    DEBUG dev flow. The complete roster is persisted in Redis; the game starts
+    as soon as every configured seat is filled.
     """
-    await room_manager.connect(room_id, playerId, websocket)
+    player_id = await resolve_websocket_player(
+        websocket, room_id=room_id, token=token, player_id=playerId
+    )
+    if player_id is None:
+        return
+
+    await room_manager.connect(room_id, player_id, websocket)
 
     try:
-        player = await _load_player_meta(playerId, playerName)
+        player = await _load_player_meta(player_id, playerName)
         state = await _prepare_room(websocket, room_id, player)
         if state is None:
-            room_manager.disconnect(room_id, playerId, websocket)
+            room_manager.disconnect(room_id, player_id, websocket)
             await websocket.close()
             return
 
         await room_manager.broadcast(room_id, {"type": "sync_state", "game": state})
-        await handle_gameplay_loop(websocket, room_id, playerId, playerName)
+        await handle_gameplay_loop(websocket, room_id, player_id, playerName)
 
     except WebSocketDisconnect:
-        room_manager.disconnect(room_id, playerId, websocket)
-        room_manager.start_disconnect_timer(room_id, playerId, forfeit_active_player)
+        room_manager.disconnect(room_id, player_id, websocket)
+        room_manager.start_disconnect_timer(room_id, player_id, forfeit_active_player)
     except Exception:
-        room_manager.disconnect(room_id, playerId, websocket)
-        room_manager.start_disconnect_timer(room_id, playerId, forfeit_active_player)
+        room_manager.disconnect(room_id, player_id, websocket)
+        room_manager.start_disconnect_timer(room_id, player_id, forfeit_active_player)
 
 
 @router.websocket("/ws/game/{room_id}/{player_num}")
@@ -248,22 +272,43 @@ async def websocket_game_endpoint(
     websocket: WebSocket,
     room_id: str,
     player_num: str,
+    token: str = Query(""),
 ):
     """
     Porteghal-compatible WebSocket endpoint.
+
+    The seat is named by the path segment, but the identity still has to be
+    proven: the token must belong to the player stored for that seat.
     """
     room_meta = await RoomService.get_room(room_id)
 
     if room_meta:
         players_meta = room_meta.get("players_meta", {})
         player_meta = players_meta.get(player_num, {})
-        player_id = player_meta.get("id", f"player_{player_num}")
+        seat_id = player_meta.get("id")
         player_name = player_meta.get("name", f"بازیکن {player_num}")
     else:
-        player_id = f"player_{player_num}"
+        seat_id = None
         player_name = f"بازیکن {player_num}"
         players_meta = {}
-        player_meta = {"id": player_id, "name": player_name, "avatar": ""}
+        player_meta = {}
+
+    if token:
+        try:
+            player_id = verify_player_token(token, room_id=room_id)
+        except AuthError as exc:
+            await reject_websocket(websocket, f"Authentication failed: {exc}")
+            return
+        if room_meta and seat_id != player_id:
+            await reject_websocket(
+                websocket, "Authentication failed: token does not match this seat"
+            )
+            return
+    elif settings.DEBUG:
+        player_id = seat_id or f"player_{player_num}"
+    else:
+        await reject_websocket(websocket, "Authentication failed: a token is required")
+        return
 
     await room_manager.connect(room_id, player_id, websocket)
 

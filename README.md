@@ -121,9 +121,11 @@ The backend reads environment variables (and `.env`) through
 | `MATCHMAKING_TIMEOUT` | `30` | Seconds to wait for a match / for a room roster to fill |
 | `PORTEGHAL_API_URL` | `http://localhost:8090` | Porteghal base URL for winner reporting |
 | `PORTEGHAL_API_KEY` | empty | Porteghal internal API key. Required for payouts; when empty the service logs an error and skips the call instead of using a fallback |
+| `GAME_TOKEN_SECRET` | empty | HMAC secret for player tokens. Falls back to `PORTEGHAL_API_KEY`; production refuses to mint or verify tokens when neither is set (`DEBUG=true` exempt) |
 | `ALLOWED_CORS_ORIGINS` | empty | Comma-separated browser origin allowlist. Empty means same-origin only (the proxy setup); `*` is refused unless `DEBUG=true` |
 
-Never commit a real `PORTEGHAL_API_KEY`. It is read from the environment only.
+Never commit a real `PORTEGHAL_API_KEY` or `GAME_TOKEN_SECRET`. Both are read
+from the environment only.
 
 The frontend has its own build-time configuration, documented in
 `front/.env.example`:
@@ -168,16 +170,18 @@ fails if the two tables drift apart.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Liveness/dependency probe |
-| `POST` | `/api/rooms` | Create a room (optionally with both players) |
-| `GET` | `/api/rooms/{room_id}` | Read the room document |
-| `POST` | `/api/rooms/{room_id}/join` | Seat the first free player slot |
-| `WS` | `/ws/queue?playerId=&playerName=&playerCount=&piecesCount=` | Matchmaking |
-| `WS` | `/ws/room/{room_id}?playerId=&playerName=` | Gameplay |
-| `WS` | `/ws/game/{room_id}/{player_num}` | Porteghal-compatible gameplay entry point |
+| `POST` | `/api/rooms` | Create a room; requires `X-API-Key`, returns a token per seated player |
+| `GET` | `/api/rooms/{room_id}` | Read the room document; needs `X-API-Key` or a seated player's `token` |
+| `POST` | `/api/rooms/{room_id}/join` | Seat the first free player slot; requires `X-API-Key` |
+| `POST` | `/api/auth/token` | Mint a player token for the queue; requires `X-API-Key` |
+| `WS` | `/ws/queue?token=&playerCount=&piecesCount=` | Matchmaking |
+| `WS` | `/ws/room/{room_id}?token=` | Gameplay |
+| `WS` | `/ws/game/{room_id}/{player_num}?token=` | Porteghal-compatible gameplay entry point |
 | `POST` | `/api/dev/room/{room_id}/place` | Cheat endpoint, mounted only when `DEBUG=true` |
 
-Message schemas, payload rules and error messages are documented in
-`ARCHITECTURE.md`.
+Every identity is derived from a signed token; the `playerId` query parameter is
+only read when `DEBUG=true`. Message schemas, payload rules and error messages
+are documented in `ARCHITECTURE.md`.
 
 ## Tests and gates
 
