@@ -3,6 +3,7 @@
  * Routes between lobby, queue and board, and hosts the global overlays.
  * Supports direct room mode for porteghal-app WebView integration.
  */
+import { useMemo } from 'react';
 import { useMenschSocket } from './hooks/useMenschSocket';
 import { LobbyScreen } from './components/LobbyScreen';
 import { QueueScreen } from './components/QueueScreen';
@@ -14,7 +15,8 @@ import { OwnConnectionOverlay } from './components/OwnConnectionOverlay';
 import { getQueryParams } from './utils/bridge';
 
 export function App() {
-  const queryParams = getQueryParams();
+  // The URL never changes while the page is open, so parse it once.
+  const queryParams = useMemo(() => getQueryParams(), []);
   const isDirectMode = !!queryParams.roomId;
 
   const {

@@ -27,6 +27,13 @@ import {
   type Side,
 } from "../utils/boardCoordinates";
 import Dice from "./Dice";
+import TurnTimer from "./TurnTimer";
+import {
+  HOP_STEP_MS,
+  hopPoints,
+  pieceTransform,
+  stackOffset,
+} from "../utils/pieceMotion";
 import type { ChatMessage } from "../hooks/useMenschSocket";
 
 interface GameBoardProps {
@@ -38,6 +45,17 @@ interface GameBoardProps {
   chatMessages: ChatMessage[];
   onSendChat: (text: string) => void;
   onPassTurn: () => void;
+}
+
+const COLOR_BY_SEAT: Record<number, string> = {
+  0: "#F94144", // red
+  1: "#277DA1", // blue
+  2: "#43AA8B", // green
+  3: "#F9C74F", // yellow
+};
+
+function getColorForVisualIdx(seat: number): string {
+  return COLOR_BY_SEAT[seat] || "#999";
 }
 
 /** Grid placement of the four yards, keyed by the corner the seat owns. */
@@ -126,6 +144,90 @@ const PlayerAvatar: React.FC<{ name: string; avatar?: string }> = ({
   );
 };
 
+const BoardGrid = React.memo(function BoardGrid() {
+  // The 89 board cells never change: memoising them keeps rolls, hops and the
+  // turn timer from reconciling the grid on every state update.
+  return (
+    <>
+        {Array.from({ length: 11 }).map((_, rIdx) => {
+          return Array.from({ length: 11 }).map((_, cIdx) => {
+            if (rIdx < 4 && cIdx < 4) return null;
+            if (rIdx < 4 && cIdx >= 7) return null;
+            if (rIdx >= 7 && cIdx < 4) return null;
+            if (rIdx >= 7 && cIdx >= 7) return null;
+
+            if (rIdx === goalCoord.r && cIdx === goalCoord.c) {
+              return (
+                <div
+                  key={`cell-${rIdx}-${cIdx}`}
+                  className="col-start-6 col-end-7 row-start-6 row-end-7 flex items-center justify-center relative"
+                >
+                  <div className="w-full h-full rounded-lg overflow-hidden relative">
+                    {SEAT_SIDES.map((side, seat) => (
+                      <div
+                        key={`goal-${side}`}
+                        style={goalTriangleStyle(
+                          side,
+                          `${getColorForVisualIdx(seat)}66`,
+                        )}
+                      />
+                    ))}
+                    <div className="absolute inset-[25%] rounded-full bg-[#E8D3B0]/50 border border-[#D4C4A0]" />
+                  </div>
+                </div>
+              );
+            }
+
+            const cellKey = `${rIdx},${cIdx}`;
+            const startSeat = START_CELL_SEATS.get(cellKey);
+            const homeSeat = HOME_CELL_SEATS.get(cellKey);
+            const isPlainCell =
+              startSeat === undefined && homeSeat === undefined;
+            const cellBackground =
+              startSeat !== undefined
+                ? getColorForVisualIdx(startSeat)
+                : homeSeat !== undefined
+                  ? `${getColorForVisualIdx(homeSeat)}4D`
+                  : undefined;
+
+            const arrowRotation = getArrowRotation({
+              r: rIdx,
+              c: cIdx,
+            });
+
+            return (
+              <div
+                key={`cell-${rIdx}-${cIdx}`}
+                style={{
+                  gridRowStart: rIdx + 1,
+                  gridColumnStart: cIdx + 1,
+                  backgroundColor: cellBackground,
+                }}
+                className={`rounded-full border ${
+                  isPlainCell
+                    ? "border-[#D4C4A0]/60 shadow-[0_1px_2px_rgba(0,0,0,0.08)]"
+                    : homeSeat !== undefined
+                      ? "border-transparent"
+                      : "border-white/40 shadow-inner"
+                } flex items-center justify-center relative transition-colors duration-300 aspect-square p-[0.15vmin]`}
+              >
+                {isPlainCell ? (
+                  <svg
+                    className={`w-2/5 h-2/5 text-[#C4B89A]/60 ${arrowRotation}`}
+                    fill="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                ) : null}
+              </div>
+            );
+          });
+        })}
+    </>
+  );
+});
+
 export const GameBoard: React.FC<GameBoardProps> = ({
   gameState,
   localPlayerId,
@@ -187,9 +289,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   const [visualPositions, setVisualPositions] = useState<
     Record<string, number>
   >({});
-  const animTimersRef = useRef<Record<string, ReturnType<typeof setInterval>>>(
-    {},
-  );
+  const pieceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const animationsRef = useRef<Map<string, Animation>>(new Map());
   const [animInitialized, setAnimInitialized] = useState(false);
 
   // Auto-scroll chat to bottom on new messages
@@ -212,6 +313,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     pos: number;
     visualPos: number;
     coord: GridCoord;
+    /** Position inside the stack of pieces sharing a cell. */
+    stackIndex: number;
+    stackCount: number;
   }[] = [];
   players.forEach((player, playerIdx) => {
     if (!player) return;
@@ -234,9 +338,26 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         pos: realPos,
         visualPos,
         coord,
+        stackIndex: 0,
+        stackCount: 1,
       });
     }
   });
+
+  // Group pieces by cell in one pass instead of filtering the whole list for
+  // every piece, and remember each piece's fan-out position.
+  const stackCounts = new Map<string, number>();
+  for (const piece of allRenderedPieces) {
+    if (piece.visualPos < 0) continue;
+    const cellKey = `${piece.coord.r},${piece.coord.c}`;
+    piece.stackIndex = stackCounts.get(cellKey) ?? 0;
+    stackCounts.set(cellKey, piece.stackIndex + 1);
+  }
+  for (const piece of allRenderedPieces) {
+    if (piece.visualPos < 0) continue;
+    piece.stackCount =
+      stackCounts.get(`${piece.coord.r},${piece.coord.c}`) ?? 1;
+  }
 
   const isPieceMovable = useCallback(
     (pieceIdx: number): boolean => {
@@ -317,9 +438,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   }, [isSpinning, gameState.dice]);
 
   // ═══ 45s turn timer ═══
-  const TURN_TIMEOUT = 45;
-  const [turnTimeLeft, setTurnTimeLeft] = useState(TURN_TIMEOUT);
-  const turnTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The countdown itself lives in <TurnTimer>, so its 1 s ticks never re-render
+  // the board.
   const hasActedRef = useRef(false);
 
   // ═══ Board measurement for piece animation ═══
@@ -341,7 +461,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     return () => ro.disconnect();
   }, []);
 
-  // Detect piece movements from the server and trigger step-by-step animation
+  // Animate moves with one Web Animation per piece. The piece hops cell by
+  // cell on the compositor and React commits the final positions once when the
+  // hop ends, so a move costs two board renders instead of one per cell.
   useEffect(() => {
     if (!gameState?.pieces || !players.length) return;
 
@@ -362,95 +484,87 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       return;
     }
 
-    const moves: Array<{ key: string; from: number; to: number }> = [];
-    players.forEach((player) => {
+    const immediate: Record<string, number> = {};
+
+    players.forEach((player, seat) => {
       if (!player) return;
       const playerPieces = pieces[player.id] || [];
       for (let i = 0; i < (pieces_count || 4); i++) {
-        const newPos = playerPieces[i] !== undefined ? playerPieces[i] : -1;
         const key = `${player.id}-${i}`;
-        const oldPos = realPositionsRef.current[key];
-        if (oldPos !== undefined && oldPos !== newPos) {
-          moves.push({ key, from: oldPos, to: newPos });
+        const to = playerPieces[i] !== undefined ? playerPieces[i] : -1;
+        const from = realPositionsRef.current[key];
+        realPositionsRef.current[key] = to;
+        if (from === undefined || from === to) continue;
+
+        const element = pieceRefs.current.get(key);
+        if (!element || cellPitch <= 0 || from < 0 || to <= from) {
+          immediate[key] = to;
+          continue;
         }
+
+        // A newer state supersedes the hop that is still in flight.
+        animationsRef.current.get(key)?.cancel();
+
+        const seatVIdx = getVisualIdx(seat);
+        const points = hopPoints(from, to, (position) =>
+          getGridCoordinates(
+            seatVIdx,
+            position,
+            trackOffsetForSeat(gameState.track_offsets, seatVIdx),
+          ),
+        );
+        const geometry = { pitch: cellPitch, size: cellPitch * 0.8, overlap: 0 };
+        const animation = element.animate(
+          points.map((point) => ({ transform: pieceTransform(point, geometry) })),
+          { duration: HOP_STEP_MS * (points.length - 1), easing: "linear" },
+        );
+        animationsRef.current.set(key, animation);
+        const finalTransform = pieceTransform(points[points.length - 1], geometry);
+        void animation.finished.then(
+          () => {
+            animationsRef.current.delete(key);
+            // Pin the finished position first: a render that lands before the
+            // commit must not snap the piece back for a frame.
+            element.style.transform = finalTransform;
+            setVisualPositions((prev) => ({ ...prev, [key]: to }));
+          },
+          () => undefined, // cancelled: the newer state decides the position
+        );
       }
     });
 
-    for (const { key, from, to } of moves) {
-      if (from >= 0 && to > from) {
-        const steps = to - from;
-        if (animTimersRef.current[key]) {
-          clearInterval(animTimersRef.current[key]);
-        }
-        setVisualPositions((prev) => ({ ...prev, [key]: from }));
-        let currentStep = 0;
-        animTimersRef.current[key] = setInterval(() => {
-          currentStep++;
-          const stepPos = from + currentStep;
-          setVisualPositions((prev) => ({ ...prev, [key]: stepPos }));
-          if (currentStep >= steps) {
-            clearInterval(animTimersRef.current[key]);
-            delete animTimersRef.current[key];
-          }
-        }, 160);
-      } else {
-        setVisualPositions((prev) => ({ ...prev, [key]: to }));
-      }
+    if (Object.keys(immediate).length) {
+      setVisualPositions((prev) => ({ ...prev, ...immediate }));
     }
+  }, [
+    animInitialized,
+    cellPitch,
+    gameState?.pieces,
+    gameState?.track_offsets,
+    pieces,
+    pieces_count,
+    players,
+  ]);
 
-    players.forEach((player) => {
-      if (!player) return;
-      const playerPieces = pieces[player.id] || [];
-      for (let i = 0; i < (pieces_count || 4); i++) {
-        const key = `${player.id}-${i}`;
-        realPositionsRef.current[key] =
-          playerPieces[i] !== undefined ? playerPieces[i] : -1;
-      }
-    });
-  }, [animInitialized, gameState?.pieces, pieces, pieces_count, players]);
-
+  // Cancel hops that are still running when the board unmounts.
   useEffect(() => {
-    const timers = animTimersRef.current;
+    const animations = animationsRef.current;
     return () => {
-      Object.values(timers).forEach(clearInterval);
+      animations.forEach((animation) => animation.cancel());
+      animations.clear();
     };
   }, []);
 
   useEffect(() => {
-    setTurnTimeLeft(TURN_TIMEOUT);
     hasActedRef.current = false;
     setIsSpinning(false);
   }, [gameState?.current_turn, gameState?.status]);
 
-  useEffect(() => {
-    if (gameState?.status !== "playing") return;
-
-    turnTimerRef.current = setInterval(() => {
-      setTurnTimeLeft((prev) => {
-        if (prev <= 1) {
-          if (turnTimerRef.current) clearInterval(turnTimerRef.current);
-          if (current_turn === localPlayerIdx && !hasActedRef.current) {
-            onPassTurn();
-          }
-          return current_turn === localPlayerIdx ? 0 : prev;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => {
-      if (turnTimerRef.current) {
-        clearInterval(turnTimerRef.current);
-        turnTimerRef.current = null;
-      }
-    };
-  }, [
-    current_turn,
-    gameState?.current_turn,
-    gameState?.status,
-    localPlayerIdx,
-    onPassTurn,
-  ]);
+  const handleTurnTimeout = useCallback(() => {
+    if (current_turn === localPlayerIdx && !hasActedRef.current) {
+      onPassTurn();
+    }
+  }, [current_turn, localPlayerIdx, onPassTurn]);
 
   useEffect(() => {
     // Drive the latch from the roll flag only: a leftover dice value must never
@@ -467,16 +581,6 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       </div>
     );
   }
-
-  const getColorForVisualIdx = (vIdx: number): string => {
-    const map: Record<number, string> = {
-      0: "#F94144", // red
-      1: "#277DA1", // blue
-      2: "#43AA8B", // green
-      3: "#F9C74F", // yellow
-    };
-    return map[vIdx] || "#999";
-  };
 
   const trackOffsets = gameState.track_offsets;
   /** Canonical color seat (red/blue/green/yellow) of a seat. */
@@ -503,7 +607,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           isPlayerActive
             ? "border-amber-400 shadow-[0_0_16px_rgba(251,191,36,0.4)]"
             : "border-white/20"
-        } ${!isOwned ? "opacity-30 grayscale" : ""} flex items-center justify-center relative shadow-[inset_0_4px_10px_rgba(0,0,0,0.15)] transition-all duration-300`}
+        } ${!isOwned ? "opacity-30 grayscale" : ""} flex items-center justify-center relative shadow-[inset_0_4px_10px_rgba(0,0,0,0.15)] transition-colors duration-300`}
       >
         <div className="grid grid-cols-2 grid-rows-2 gap-[clamp(3px,0.5vmin,8px)] p-[clamp(4px,0.8vmin,12px)] w-full h-full">
           {Array.from({ length: 4 }).map((_, idx) => {
@@ -571,36 +675,14 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         className={`flex items-center gap-2 ${pos === "tr" || pos === "br" ? "flex-row-reverse" : ""}`}
       >
         <div
-          className={`flex items-center gap-2 bg-white/90 backdrop-blur-sm rounded-full shadow-[0_6px_16px_rgba(0,0,0,0.06)] px-2 py-1 ${isTurn ? "ring-2 ring-amber-400/60" : ""}`}
+          className={`flex items-center gap-2 bg-white rounded-full shadow-[0_6px_16px_rgba(0,0,0,0.06)] px-2 py-1 ${isTurn ? "ring-2 ring-amber-400/60" : ""}`}
         >
           <div className="relative w-[42px] h-[42px] flex items-center justify-center">
-            {isTurn && (
-              <svg
-                className="absolute inset-0 w-full h-full -rotate-90"
-                viewBox="0 0 42 42"
-              >
-                <circle
-                  cx="21"
-                  cy="21"
-                  r="19"
-                  fill="none"
-                  stroke="rgba(251,191,36,0.25)"
-                  strokeWidth="2.5"
-                />
-                <circle
-                  cx="21"
-                  cy="21"
-                  r="19"
-                  fill="none"
-                  stroke="#F59E0B"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeDasharray={`${2 * Math.PI * 19}`}
-                  strokeDashoffset={`${(1 - turnTimeLeft / 45) * 2 * Math.PI * 19}`}
-                  className="transition-all duration-1000 ease-linear"
-                />
-              </svg>
-            )}
+            <TurnTimer
+              active={isTurn && gameState.status === "playing"}
+              resetKey={`${current_turn}:${gameState.status}`}
+              onTimeout={handleTurnTimeout}
+            />
             <PlayerAvatar name={p.name} avatar={p.avatar} />
             <div
               className="absolute -bottom-0.5 -right-0.5 w-[10px] h-[10px] rounded-full border-2 border-white"
@@ -724,82 +806,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                 })}
                 {/* Unused corners are dimmed by renderBaseYard itself. */}
                 <div className="absolute inset-0 bg-white/30 rounded-xl pointer-events-none -z-10" />
-                {/* Grid cells */}
-                {Array.from({ length: 11 }).map((_, rIdx) => {
-                  return Array.from({ length: 11 }).map((_, cIdx) => {
-                    if (rIdx < 4 && cIdx < 4) return null;
-                    if (rIdx < 4 && cIdx >= 7) return null;
-                    if (rIdx >= 7 && cIdx < 4) return null;
-                    if (rIdx >= 7 && cIdx >= 7) return null;
-
-                    if (rIdx === goalCoord.r && cIdx === goalCoord.c) {
-                      return (
-                        <div
-                          key={`cell-${rIdx}-${cIdx}`}
-                          className="col-start-6 col-end-7 row-start-6 row-end-7 flex items-center justify-center relative"
-                        >
-                          <div className="w-full h-full rounded-lg overflow-hidden relative">
-                            {SEAT_SIDES.map((side, seat) => (
-                              <div
-                                key={`goal-${side}`}
-                                style={goalTriangleStyle(
-                                  side,
-                                  `${getColorForVisualIdx(seat)}66`,
-                                )}
-                              />
-                            ))}
-                            <div className="absolute inset-[25%] rounded-full bg-[#E8D3B0]/50 border border-[#D4C4A0]" />
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    const cellKey = `${rIdx},${cIdx}`;
-                    const startSeat = START_CELL_SEATS.get(cellKey);
-                    const homeSeat = HOME_CELL_SEATS.get(cellKey);
-                    const isPlainCell =
-                      startSeat === undefined && homeSeat === undefined;
-                    const cellBackground =
-                      startSeat !== undefined
-                        ? getColorForVisualIdx(startSeat)
-                        : homeSeat !== undefined
-                          ? `${getColorForVisualIdx(homeSeat)}4D`
-                          : undefined;
-
-                    const arrowRotation = getArrowRotation({
-                      r: rIdx,
-                      c: cIdx,
-                    });
-
-                    return (
-                      <div
-                        key={`cell-${rIdx}-${cIdx}`}
-                        style={{
-                          gridRowStart: rIdx + 1,
-                          gridColumnStart: cIdx + 1,
-                          backgroundColor: cellBackground,
-                        }}
-                        className={`rounded-full border ${
-                          isPlainCell
-                            ? "border-[#D4C4A0]/60 shadow-[0_1px_2px_rgba(0,0,0,0.08)]"
-                            : homeSeat !== undefined
-                              ? "border-transparent"
-                              : "border-white/40 shadow-inner"
-                        } flex items-center justify-center relative transition-all duration-300 aspect-square p-[0.15vmin]`}
-                      >
-                        {isPlainCell ? (
-                          <svg
-                            className={`w-2/5 h-2/5 text-[#C4B89A]/60 ${arrowRotation}`}
-                            fill="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path d="M8 5v14l11-7z" />
-                          </svg>
-                        ) : null}
-                      </div>
-                    );
-                  });
-                })}
+                <BoardGrid />
               </div>
 
               {/* ═══ Animated piece overlay ═══ */}
@@ -812,29 +819,21 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                   >
                     {allRenderedPieces
                       .filter((p) => p.visualPos >= 0)
-                      .map(({ vIdx, playerId: pId, pieceIdx, coord }) => {
+                      .map(({
+                        vIdx,
+                        playerId: pId,
+                        pieceIdx,
+                        coord,
+                        stackIndex,
+                        stackCount,
+                      }) => {
                         const theme = playerColors[colorSeatOf(vIdx)];
                         if (!theme) return null;
                         const isMovable =
                           pId === localPlayerId && isPieceMovable(pieceIdx);
 
-                        const piecesInSameCoord = allRenderedPieces.filter(
-                          (p) => p.coord.r === coord.r && p.coord.c === coord.c,
-                        );
-                        const pieceIndexInSameCoord =
-                          piecesInSameCoord.findIndex(
-                            (p) =>
-                              p.playerId === pId && p.pieceIdx === pieceIdx,
-                          );
-
                         const pieceSize = cellPitch * 0.8;
-                        const overlapOffset =
-                          piecesInSameCoord.length > 1
-                            ? (pieceIndexInSameCoord -
-                                (piecesInSameCoord.length - 1) / 2) *
-                              5
-                            : 0;
-
+                        const overlapOffset = stackOffset(stackIndex, stackCount);
                         const color = colorOfSeat(vIdx);
 
                         return (
@@ -851,14 +850,23 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                                 onMovePiece(pieceIdx);
                               }
                             }}
+                            ref={(element) => {
+                              const key = `${pId}-${pieceIdx}`;
+                              if (element) pieceRefs.current.set(key, element);
+                              else pieceRefs.current.delete(key);
+                            }}
                             style={{
                               position: "absolute",
-                              left: `${coord.c * cellPitch + (cellPitch - pieceSize) / 2 + overlapOffset}px`,
-                              top: `${coord.r * cellPitch + (cellPitch - pieceSize) / 2 - overlapOffset}px`,
+                              left: 0,
+                              top: 0,
                               width: `${pieceSize}px`,
                               height: `${pieceSize}px`,
-                              transition: "left 0.15s ease, top 0.15s ease",
-                              zIndex: 20 + pieceIndexInSameCoord,
+                              transform: pieceTransform(coord, {
+                                pitch: cellPitch,
+                                size: pieceSize,
+                                overlap: overlapOffset,
+                              }),
+                              zIndex: 20 + stackIndex,
                               pointerEvents: "auto",
                             }}
                             onClick={() => isMovable && onMovePiece(pieceIdx)}
@@ -923,7 +931,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       {/* ═══ CHAT BAR ═══ */}
       <footer className="px-3 pb-[clamp(4px,1vh,8px)] pt-1">
         {chatMessages.length > 0 && (
-          <div className="mx-1 mb-1 max-h-[clamp(60px,8vh,100px)] overflow-y-auto overscroll-contain rounded-xl bg-white/80 backdrop-blur-sm shadow-[0_2px_8px_rgba(0,0,0,0.04)] px-3 py-2 space-y-1">
+          <div className="mx-1 mb-1 max-h-[clamp(60px,8vh,100px)] overflow-y-auto overscroll-contain rounded-xl bg-white/95 shadow-[0_2px_8px_rgba(0,0,0,0.04)] px-3 py-2 space-y-1">
             {chatMessages.map((msg, i) => (
               <div
                 key={i}
