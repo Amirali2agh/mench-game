@@ -172,6 +172,8 @@ WebSocket upgrades need no extra configuration in Caddy; nginx needs
 - [ ] The frontend was built with the intended `VITE_API_BASE_URL` and
       `VITE_WS_BASE_URL` (both empty when the proxy serves `/api` and `/ws`),
       and `VITE_ALLOWED_HOSTS` is only used for development.
+- [ ] A cross-origin iframe host opens the game with
+      `?parentOrigin=https://<host>` so bridge messages stay targeted.
 - [ ] TLS is terminated by the proxy; the client uses `wss://`.
 - [ ] `/health` is monitored and the Redis dependency is part of the alert.
 - [ ] Logs are collected (structured logging, no player secrets).

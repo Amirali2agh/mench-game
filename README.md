@@ -180,8 +180,14 @@ fails if the two tables drift apart.
 | `POST` | `/api/dev/room/{room_id}/place` | Cheat endpoint, mounted only when `DEBUG=true` |
 
 Every identity is derived from a signed token; the `playerId` query parameter is
-only read when `DEBUG=true`. Message schemas, payload rules and error messages
-are documented in `ARCHITECTURE.md`.
+only read when `DEBUG=true`. Frames are capped at 4 KB and rate-limited to 10
+actions per second per socket, and every id is checked against a strict
+allowlist before it reaches a Redis key.
+
+A host that embeds the game in a cross-origin iframe adds
+`?parentOrigin=https://<host>`: bridge messages (`GAME_FINISHED`, `APP_ERROR`,
+…) are posted only to that origin, never to `*`. Message schemas, payload
+rules, limits and error messages are documented in `ARCHITECTURE.md`.
 
 ## Tests and gates
 
