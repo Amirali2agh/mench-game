@@ -162,8 +162,12 @@ WebSocket upgrades need no extra configuration in Caddy; nginx needs
 - [ ] `DEBUG=false` (the `/api/dev` cheat endpoints must answer 404).
 - [ ] `PORTEGHAL_API_KEY` is set in the environment; the service logs an error
       and skips payouts when it is missing.
-- [ ] `GAME_TOKEN_SECRET` is set (or `PORTEGHAL_API_KEY` is reused); without
-      it every socket is rejected, because no token can be verified.
+- [ ] `GAME_TOKEN_SECRET` is set to its own value (not the Porteghal key), so
+      rotating one credential does not invalidate the other; without it every
+      socket is rejected, because no token can be verified.
+- [ ] `PORTEGHAL_API_KEY` is **not** the value that leaked into the repository
+      history in commit `3b04af8`; that key is public and must be treated as
+      revoked. See section 7.
 - [ ] The host backend creates rooms with `X-API-Key` and opens the WebView
       with `?token=…` from `player_tokens` (or calls `POST /api/auth/token`
       before matchmaking). A URL without a token is refused with close code
@@ -193,3 +197,61 @@ systemctl restart mench
 
 Run the test suite (`python -m pytest -q` and the three frontend gates) on the
 exact commit before restarting.
+
+## 7. Rotating the shared secrets
+
+`PORTEGHAL_API_KEY` and `GAME_TOKEN_SECRET` are bearer-style credentials: the
+first authenticates this service to Porteghal, the second signs the player
+tokens a WebView presents. Both are read from the environment only: `app/config.py`
+defaults them to empty strings and no committed file may carry a value, so a
+rotation is an environment change plus a restart — no code change.
+
+Why this section exists: commit `3b04af8` shipped a real `PORTEGHAL_API_KEY` in
+`app/services/prize_service.py`. Commit `7cb4a37` removed it and the current
+tree contains no key, but the value is public history and must be considered
+compromised until it answers 401 at Porteghal. Treat any secret that ever
+appeared in this repository the same way.
+
+### 7.1 Rotate
+
+1. In the Porteghal admin panel, revoke the old key and issue a new one.
+2. Generate a separate signing secret — do not reuse the API key:
+   ```bash
+   openssl rand -base64 48
+   ```
+3. Update `/etc/mench.env` (mode `0640`, owned by the service user):
+   ```ini
+   PORTEGHAL_API_KEY=<new-key>
+   GAME_TOKEN_SECRET=<new-signing-secret>
+   ```
+4. Restart and confirm the service is healthy:
+   ```bash
+   systemctl restart mench
+   curl -fsS https://<game-host>/health
+   ```
+
+### 7.2 Verify the rotation
+
+* The old key must be rejected. Any 2xx here means it is still live — stop and
+  escalate before declaring the rotation done:
+  ```bash
+  curl -s -o /dev/null -w '%{http_code}\n' \
+    -X POST https://<porteghal-host>/api/internal/game-rooms/update \
+    -H 'X-Api-Key: <old-key>' -H 'Content-Type: application/json' \
+    -d '{"roomId":"rotation-check","status":"finished"}'
+  ```
+  Expect `401`/`403`. A `2xx` means the old key is still valid; do not declare
+  the rotation finished until Porteghal refuses it.
+* The service log must not report `PORTEGHAL_API_KEY is not configured`, and a
+  finished match must report its winner exactly once (`report_winner` claims the
+  match, so a rotated key cannot double-pay).
+* `GAME_TOKEN_SECRET` invalidates every token already handed out, so live
+  players are disconnected with close code `1008` and must be given a fresh
+  token by the host app. Rotate between matches when possible.
+
+### 7.3 If a secret is committed again
+
+The CI secret scan (`.github/workflows/ci.yml`, job `secret-scan`) fails a pull
+request that contains a credential-looking string. If something slips through:
+revoke first, rotate second, and only then look at the history — rewriting it
+does not un-publish a value that has already been cloned or mirrored.
