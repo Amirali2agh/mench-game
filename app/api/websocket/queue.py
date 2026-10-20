@@ -1,6 +1,7 @@
 import asyncio
 import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from app.api.security import resolve_websocket_player
 from app.config import settings
 from app.managers.queue_manager import queue_manager
 from app.services.queue_service import QueueService
@@ -81,19 +82,31 @@ async def _wait_for_match(
 @router.websocket("/ws/queue")
 async def websocket_queue_endpoint(
     websocket: WebSocket,
-    playerId: str = Query(...),
-    playerName: str = Query(...),
+    playerId: str = Query(""),
+    playerName: str = Query(""),
     playerAvatarUrl: str = Query(""),
     playerCount: int = Query(2),
     piecesCount: int = Query(4),
+    token: str = Query(""),
 ):
-    """Redis-backed matchmaking with worker-independent match delivery."""
-    await queue_manager.connect(playerId, websocket)
+    """
+    Redis-backed matchmaking with worker-independent match delivery.
+
+    The player id is taken from the signed token; ``playerId`` is only read in
+    the DEBUG dev flow.
+    """
+    player_id = await resolve_websocket_player(
+        websocket, room_id=None, token=token, player_id=playerId
+    )
+    if player_id is None:
+        return
+
+    await queue_manager.connect(player_id, websocket)
     match_watch_task = None
 
     try:
         match_result = await QueueService.add_to_queue(
-            player_id=playerId,
+            player_id=player_id,
             player_name=playerName,
             avatar_url=playerAvatarUrl,
             target_players=playerCount,
@@ -105,7 +118,7 @@ async def websocket_queue_endpoint(
             # Redis watcher, so we only need to notify the current connection
             # directly. This avoids duplicate match_found messages.
             await queue_manager.send_match_found(
-                playerId,
+                player_id,
                 match_result["room_id"],
                 match_result["players"],
                 match_result["pieces_count"],
@@ -114,21 +127,21 @@ async def websocket_queue_endpoint(
             # The first player may be connected to a different worker from the
             # player that completes the match. Redis closes that gap.
             match_watch_task = asyncio.create_task(
-                _wait_for_match(websocket, playerId, playerCount, piecesCount)
+                _wait_for_match(websocket, player_id, playerCount, piecesCount)
             )
 
         while True:
             await websocket.receive_text()
 
     except WebSocketDisconnect:
-        queue_manager.disconnect(playerId)
+        queue_manager.disconnect(player_id)
         await QueueService.remove_from_queue(
-            playerId, playerCount, piecesCount
+            player_id, playerCount, piecesCount
         )
     except Exception:
-        queue_manager.disconnect(playerId)
+        queue_manager.disconnect(player_id)
         await QueueService.remove_from_queue(
-            playerId, playerCount, piecesCount
+            player_id, playerCount, piecesCount
         )
     finally:
         if match_watch_task:

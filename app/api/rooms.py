@@ -2,10 +2,12 @@ import json
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
+from app.api.security import require_api_key, require_room_access
 from app.redis_client import redis_client
 from app.services import room_service as RoomService
+from app.services.auth import TOKEN_TTL_SECONDS, issue_player_token
 
 router = APIRouter(prefix="/api")
 
@@ -49,6 +51,8 @@ class RoomJoinResponse(BaseModel):
     player2_avatar: str
     status: str
     coin_bet: int = 0
+    #: Signed tokens per seated player; the WebView must present one to connect.
+    player_tokens: dict[str, str] = Field(default_factory=dict)
 
 
 class JoinRoomRequest(BaseModel):
@@ -66,7 +70,11 @@ def _player_meta(player_id: str, name: str, avatar: str) -> dict:
     return {"id": player_id, "name": name, "avatar": avatar}
 
 
-@router.post("/rooms", response_model=RoomJoinResponse)
+@router.post(
+    "/rooms",
+    response_model=RoomJoinResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def create_room(req: CreateRoomRequest):
     room_id = req.room_id or str(uuid.uuid4())[:8]
     room = RoomService.new_room(
@@ -81,6 +89,7 @@ async def create_room(req: CreateRoomRequest):
     # can resolve a display name.
     await RoomService.save_room(room_id, room)
 
+    player_tokens: dict[str, str] = {}
     for player_id, name, avatar in (
         (req.player1_id, req.player1_name, req.player1_avatar),
         (req.player2_id, req.player2_name, req.player2_avatar),
@@ -92,6 +101,7 @@ async def create_room(req: CreateRoomRequest):
         room, _seat, error = await RoomService.register_player(room_id, player)
         if error:
             raise HTTPException(status_code=409, detail=error)
+        player_tokens[player_id] = issue_player_token(player_id, room_id)
 
     # The game only starts when every configured seat is filled.
     await RoomService.start_game(room_id, room)
@@ -106,10 +116,15 @@ async def create_room(req: CreateRoomRequest):
         player2_avatar=req.player2_avatar,
         status=room["status"],
         coin_bet=req.coin_bet,
+        player_tokens=player_tokens,
     )
 
 
-@router.get("/rooms/{room_id}", response_model=RoomJoinResponse)
+@router.get(
+    "/rooms/{room_id}",
+    response_model=RoomJoinResponse,
+    dependencies=[Depends(require_room_access)],
+)
 async def get_room(room_id: str):
     room = await RoomService.get_room(room_id)
     if room is None:
@@ -132,7 +147,10 @@ async def get_room(room_id: str):
     )
 
 
-@router.post("/rooms/{room_id}/join")
+@router.post(
+    "/rooms/{room_id}/join",
+    dependencies=[Depends(require_api_key)],
+)
 async def join_room(room_id: str, req: JoinRoomRequest):
     room = await RoomService.get_room(room_id)
     if room is None:
@@ -145,6 +163,8 @@ async def join_room(room_id: str, req: JoinRoomRequest):
             "room_id": room_id,
             "player_num": existing_seat,
             "status": room.get("status"),
+            "token": issue_player_token(req.player_id, room_id),
+            "expires_in": TOKEN_TTL_SECONDS,
         }
 
     player = _player_meta(req.player_id, req.player_name, req.player_avatar)
@@ -156,4 +176,10 @@ async def join_room(room_id: str, req: JoinRoomRequest):
     await redis_client.set(f"player:{req.player_id}:meta", json.dumps(player))
     await RoomService.start_game(room_id, room)
 
-    return {"room_id": room_id, "player_num": seat, "status": room["status"]}
+    return {
+        "room_id": room_id,
+        "player_num": seat,
+        "status": room["status"],
+        "token": issue_player_token(req.player_id, room_id),
+        "expires_in": TOKEN_TTL_SECONDS,
+    }

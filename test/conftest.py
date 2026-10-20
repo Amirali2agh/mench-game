@@ -11,6 +11,7 @@ import time
 
 import pytest
 
+from app.config import settings
 from app.services import room_service as RoomService
 
 
@@ -201,3 +202,15 @@ def room_factory(fake_redis):
         return asyncio.run(_run())
 
     return _create
+
+
+@pytest.fixture(autouse=True)
+def _dev_auth(monkeypatch):
+    """
+    Run the shared suites through the DEBUG dev flow.
+
+    Production requires signed tokens (see ``test_auth.py``); keeping DEBUG on
+    here means the existing tests keep identifying players by query string,
+    exactly like a local run.
+    """
+    monkeypatch.setattr(settings, "DEBUG", True)
