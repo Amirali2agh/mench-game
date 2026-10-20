@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "node --test src/utils/boardCoordinates.test.ts src/utils/backendOrigin.test.ts src/utils/playerIdentity.test.ts src/utils/tailwindClasses.test.ts src/utils/bridge.test.ts src/utils/pieceMotion.test.ts",
+    "test": "node --test src/utils/boardCoordinates.test.ts src/utils/backendOrigin.test.ts src/utils/playerIdentity.test.ts src/utils/tailwindClasses.test.ts src/utils/bridge.test.ts src/utils/pieceMotion.test.ts src/utils/movement.test.ts",
     "lint": "eslint . --max-warnings=0"
   },
   "dependencies": {
