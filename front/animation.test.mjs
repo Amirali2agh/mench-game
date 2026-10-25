@@ -602,16 +602,18 @@ const CHECKS = [
   {
     id: "S5",
     issue: "#70",
-    title: "a state arriving mid-hop does not teleport the piece",
+    title: "states arriving mid-hop do not teleport the piece",
     async run(t) {
       await t.open({ pieces: [0], turn: 1 });
       await t.startSampler();
       await t.lab("move", 0, 4);
       await sleep(150); // still inside the 4-step hop
       await t.lab("move", 0, 6);
-      await sleep(1200);
+      await sleep(150); // and still inside the re-targeted hop
+      await t.lab("move", 0, 8);
+      await sleep(1400);
       const frames = await t.stopSampler();
-      assertAdjacentCells(cellSequence(frames, 1), "second state mid-hop");
+      assertAdjacentCells(cellSequence(frames, 1), "states arriving mid-hop");
     },
   },
 

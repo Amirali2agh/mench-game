@@ -325,6 +325,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   const localPlayerIdx = players.findIndex((p) => p?.id === localPlayerId);
   const isMyTurn = current_turn === localPlayerIdx;
   const localDice = gameState?.dice ?? null;
+  // Read once per render for the drawing decisions; the effects below read it
+  // again through `prefersReducedMotion()` so a change applies to the next move.
+  const reducedMotion = prefersReducedMotion();
 
   // Keep an automatic pass result visible briefly, even after current_turn advances.
   useEffect(() => {
@@ -357,12 +360,20 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   >({});
   const pieceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const animationsRef = useRef<Map<string, Animation>>(new Map());
-  /** Track positions a running hop started and ends at, for the next state. */
-  const hopMetaRef = useRef<Map<string, { from: number; to: number }>>(new Map());
+  /**
+   * Track positions a running hop started and ends at, for the next state. The
+   * animation is part of the record: a cancelled hop's rejection handler runs
+   * one microtask later, after its replacement has registered its own record,
+   * so it must be able to tell that the entry is no longer its own.
+   */
+  const hopMetaRef = useRef<
+    Map<string, { from: number; to: number; animation: Animation }>
+  >(new Map());
   const [animInitialized, setAnimInitialized] = useState(false);
 
   const [transits, setTransits] = useState<Record<string, Transit>>({});
-  const startedTransitsRef = useRef<Set<string>>(new Set());
+  /** Which transit object owns each key, so a superseded flight cannot land. */
+  const startedTransitsRef = useRef<Map<string, Transit>>(new Map());
 
   // Auto-scroll chat to bottom on new messages
   useEffect(() => {
@@ -398,26 +409,34 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       const realPos = playerPieces[i] !== undefined ? playerPieces[i] : -1;
       const key = `${player.id}-${i}`;
       const transit = transits[key];
-      const ghost = transit?.ghost ? transit : null;
-      // A released piece is not on the board yet: the stand-in draws it coming
-      // out of the base, and the real piece takes over when the flight lands.
-      const visualPos = ghost ? -1 : (visualPositions[key] ?? realPos);
-      const coord = ghost
-        ? ghost.from
-        : getGridCoordinates(
-            vIdx,
-            visualPos,
-            trackOffsetForSeat(gameState.track_offsets, vIdx),
-          );
+      const visualPos = visualPositions[key] ?? realPos;
+      // A released piece has no board position yet. Draw it at the slot it is
+      // leaving as soon as the new state renders: the hop effect runs after the
+      // first paint, so waiting for it would blink the piece out for a frame.
+      const pendingRelease =
+        !transit && !reducedMotion && realPos >= 0 && visualPos === -1;
+      const ghostStart = transit?.ghost
+        ? transit.from
+        : pendingRelease
+          ? yardSlotCentreForPiece(gameState.track_offsets, playerIdx, i)
+          : null;
+      const ghost = ghostStart !== null;
+      const coord =
+        ghostStart ??
+        getGridCoordinates(
+          vIdx,
+          visualPos,
+          trackOffsetForSeat(gameState.track_offsets, vIdx),
+        );
       allRenderedPieces.push({
         playerIdx,
         vIdx,
         playerId: player.id,
         pieceIdx: i,
         pos: realPos,
-        visualPos,
+        visualPos: ghost ? -1 : visualPos,
         coord,
-        ghost: Boolean(ghost),
+        ghost,
         stackIndex: 0,
         stackCount: 1,
       });
@@ -577,6 +596,11 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           const offset = trackOffsetForSeat(gameState.track_offsets, seatVIdx);
           const base = yardSlotCentreForPiece(gameState.track_offsets, seat, i);
           const released = from < 0;
+          // A flight may still be running for this piece: hand the key over.
+          animationsRef.current.get(key)?.cancel();
+          animationsRef.current.delete(key);
+          hopMetaRef.current.delete(key);
+          startedTransitsRef.current.delete(key);
           setTransits((previous) => ({
             ...previous,
             [key]: {
@@ -626,8 +650,12 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           );
         }
         inFlight?.cancel();
-        animationsRef.current.delete(key);
-        hopMetaRef.current.delete(key);
+        if (animationsRef.current.get(key) === inFlight) {
+          animationsRef.current.delete(key);
+        }
+        if (hopMetaRef.current.get(key) === inFlightMeta) {
+          hopMetaRef.current.delete(key);
+        }
 
         const cells = hopPoints(startPosition, to, coordOf);
         const points = painted ? [painted, ...cells] : cells;
@@ -637,20 +665,27 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           { duration: HOP_STEP_MS * (points.length - 1), easing: "linear" },
         );
         animationsRef.current.set(key, animation);
-        hopMetaRef.current.set(key, { from: startPosition, to });
+        hopMetaRef.current.set(key, { from: startPosition, to, animation });
         const finalTransform = pieceTransform(points[points.length - 1], geometry);
         void animation.finished.then(
           () => {
-            animationsRef.current.delete(key);
-            hopMetaRef.current.delete(key);
+            if (animationsRef.current.get(key) === animation) {
+              animationsRef.current.delete(key);
+            }
+            if (hopMetaRef.current.get(key)?.animation === animation) {
+              hopMetaRef.current.delete(key);
+            }
             // Pin the finished position first: a render that lands before the
             // commit must not snap the piece back for a frame.
             element.style.transform = finalTransform;
             setVisualPositions((prev) => ({ ...prev, [key]: to }));
           },
           () => {
-            // cancelled: the newer state decides the position
-            hopMetaRef.current.delete(key);
+            // Cancelled: the newer state decides the position. Only drop our
+            // own record — the replacement may already have registered.
+            if (hopMetaRef.current.get(key)?.animation === animation) {
+              hopMetaRef.current.delete(key);
+            }
           },
         );
       }
@@ -675,12 +710,22 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     const geometry = { pitch: cellPitch, size: cellPitch * 0.8, overlap: 0 };
 
     Object.values(transits).forEach((transit) => {
-      if (startedTransitsRef.current.has(transit.key)) return;
+      if (startedTransitsRef.current.get(transit.key) === transit) return;
       const element = pieceRefs.current.get(transit.key);
 
-      const land = (pin: boolean) => {
-        startedTransitsRef.current.delete(transit.key);
-        animationsRef.current.delete(transit.key);
+      const settle = (pin: boolean, animation?: Animation) => {
+        // A superseded flight must not touch the key any more: its rejection
+        // handler runs after the replacement has taken over.
+        const ownsAnimation =
+          !animation || animationsRef.current.get(transit.key) === animation;
+        if (animation) {
+          if (startedTransitsRef.current.get(transit.key) === transit) {
+            startedTransitsRef.current.delete(transit.key);
+          }
+          if (ownsAnimation) animationsRef.current.delete(transit.key);
+        }
+        if (!ownsAnimation) return;
+
         if (pin && element) {
           element.style.transform = pieceTransform(transit.to, geometry);
         }
@@ -693,7 +738,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           }));
         }
         setTransits((previous) => {
-          if (!previous[transit.key]) return previous;
+          if (previous[transit.key] !== transit) return previous;
           const next = { ...previous };
           delete next[transit.key];
           return next;
@@ -702,11 +747,10 @@ export const GameBoard: React.FC<GameBoardProps> = ({
 
       if (!element) {
         // Nothing to draw (the piece unmounted mid-flight): just commit.
-        land(false);
+        settle(false);
         return;
       }
 
-      startedTransitsRef.current.add(transit.key);
       const animation = element.animate(
         [
           { transform: pieceTransform(transit.from, geometry) },
@@ -714,11 +758,12 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         ],
         { duration: TRANSIT_MS, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
       );
+      startedTransitsRef.current.set(transit.key, transit);
       animationsRef.current.set(transit.key, animation);
 
       void animation.finished.then(
-        () => land(true),
-        () => land(false), // cancelled: the newer state decides the position
+        () => settle(true, animation),
+        () => settle(false, animation), // cancelled: the newer state decides
       );
     });
   }, [cellPitch, transits]);
