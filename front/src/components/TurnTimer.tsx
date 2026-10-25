@@ -76,7 +76,7 @@ const TurnTimer: React.FC<TurnTimerProps> = ({ active, resetKey, onTimeout }) =>
         strokeLinecap="round"
         strokeDasharray={`${CIRCUMFERENCE}`}
         strokeDashoffset={`${elapsed * CIRCUMFERENCE}`}
-        className="transition-[stroke-dashoffset] duration-1000 ease-linear"
+        className="transition-[stroke-dashoffset] duration-1000 ease-linear motion-reduce:transition-none"
       />
     </svg>
   );

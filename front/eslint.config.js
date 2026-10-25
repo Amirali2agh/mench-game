@@ -20,6 +20,12 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
   {
+    // The animation harness drives a real browser from Node: `node:` APIs at the
+    // top level, browser globals inside the `page.evaluate` callbacks.
+    files: ["animation.test.mjs"],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
+  },
+  {
     files: ["**/*.{ts,tsx}"],
     languageOptions: {
       ecmaVersion: 2022,

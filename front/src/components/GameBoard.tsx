@@ -14,12 +14,13 @@ import { playerColors } from "../utils/colors";
 import {
   HOME_COLUMNS,
   SEAT_CORNERS,
-  SEAT_SIDES,
   START_CELLS,
   cornerForSeat,
   getArrowRotation,
   getGridCoordinates,
+  goalSideForHomeColumn,
   goalCoord,
+  yardSlotCentreForPiece,
   GridCoord,
   seatColorIndex,
   trackOffsetForSeat,
@@ -30,11 +31,14 @@ import Dice from "./Dice";
 import TurnTimer from "./TurnTimer";
 import {
   HOP_STEP_MS,
+  TRANSIT_MS,
   hopPoints,
   pieceTransform,
   stackOffset,
+  type GridPoint,
 } from "../utils/pieceMotion";
 import { canMovePiece } from "../utils/movement";
+import { prefersReducedMotion } from "../utils/motion";
 import type { ChatMessage } from "../hooks/useMenschSocket";
 
 interface GameBoardProps {
@@ -69,6 +73,15 @@ const YARD_CLASSES: Record<Corner, string> = {
 
 const YARD_CORNERS: Corner[] = ["tl", "tr", "bl", "br"];
 
+/**
+ * Side of the goal each triangle belongs to, in colour-seat order.
+ *
+ * Derived from the home columns rather than from the seat index: a two-player
+ * match can seat any colour on any corner, and the triangle has to follow the
+ * column that actually leads into the goal.
+ */
+const GOAL_SIDES: Side[] = HOME_COLUMNS.map(goalSideForHomeColumn);
+
 /** Track cell -> seat, so a cell can be painted without hard-coded coordinates. */
 const START_CELL_SEATS = new Map<string, number>(
   START_CELLS.map((cell, seat) => [`${cell.r},${cell.c}`, seat] as const),
@@ -80,6 +93,40 @@ const HOME_CELL_SEATS = new Map<string, number>(
     cells.map((cell) => [`${cell.r},${cell.c}`, seat] as const),
   ),
 );
+
+/**
+ * Cell coordinates (fractional) that a piece is painted at right now.
+ *
+ * Reading the painted transform instead of the last committed position is what
+ * keeps a hop that is superseded mid-flight from jumping: the new keyframes
+ * start where the piece actually is.
+ */
+function paintedPoint(element: HTMLElement, pitch: number): GridPoint | null {
+  const matrix = /matrix\(([^)]*)\)/.exec(getComputedStyle(element).transform);
+  if (!matrix) return null;
+  const parts = matrix[1].split(",").map(Number);
+  if (parts.length < 6) return null;
+  const pad = (pitch - pitch * 0.8) / 2;
+  return { r: (parts[5] - pad) / pitch, c: (parts[4] - pad) / pitch };
+}
+
+/**
+ * A flight between the board and a base (a capture, or a piece coming out of
+ * the base). It is not a walk along the track: the piece leaves the cell grid,
+ * so the destination element is suppressed until the flight lands.
+ */
+interface Transit {
+  key: string;
+  from: GridPoint;
+  to: GridPoint;
+  /** Board position committed when the flight lands (-1 = back in the base). */
+  target: number;
+  /**
+   * A released piece has no element on the board yet, so the flight is drawn by
+   * a stand-in that the overlay mounts at the base.
+   */
+  ghost: boolean;
+}
 
 /** Triangle of the center goal that leads into the home column of a seat. */
 function goalTriangleStyle(side: Side, color: string): React.CSSProperties {
@@ -129,6 +176,24 @@ function goalTriangleStyle(side: Side, color: string): React.CSSProperties {
   }
 }
 
+/** The glass disc every piece is drawn with (board, base and in-flight). */
+const PieceDisc: React.FC<{ color: string; className?: string }> = ({
+  color,
+  className = "",
+}) => (
+  <div
+    className={`rounded-full bg-white shadow-[0_3px_8px_rgba(0,0,0,0.25)] flex items-center justify-center relative ${className}`}
+  >
+    <div
+      className="w-[70%] h-[70%] rounded-full relative overflow-hidden"
+      style={{ backgroundColor: color }}
+    >
+      <div className="absolute inset-0 bg-gradient-to-br from-white/40 via-white/10 to-transparent rounded-full" />
+    </div>
+    <div className="absolute top-[8%] left-[15%] w-[30%] h-[20%] rounded-full bg-white/60 blur-[1px] rotate-[-20deg]" />
+  </div>
+);
+
 const PlayerAvatar: React.FC<{ name: string; avatar?: string }> = ({
   name,
   avatar,
@@ -164,12 +229,12 @@ const BoardGrid = React.memo(function BoardGrid() {
                   className="col-start-6 col-end-7 row-start-6 row-end-7 flex items-center justify-center relative"
                 >
                   <div className="w-full h-full rounded-lg overflow-hidden relative">
-                    {SEAT_SIDES.map((side, seat) => (
+                    {GOAL_SIDES.map((side, colorSeat) => (
                       <div
                         key={`goal-${side}`}
                         style={goalTriangleStyle(
                           side,
-                          `${getColorForVisualIdx(seat)}66`,
+                          `${getColorForVisualIdx(colorSeat)}66`,
                         )}
                       />
                     ))}
@@ -260,6 +325,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   const localPlayerIdx = players.findIndex((p) => p?.id === localPlayerId);
   const isMyTurn = current_turn === localPlayerIdx;
   const localDice = gameState?.dice ?? null;
+  // Read once per render for the drawing decisions; the effects below read it
+  // again through `prefersReducedMotion()` so a change applies to the next move.
+  const reducedMotion = prefersReducedMotion();
 
   // Keep an automatic pass result visible briefly, even after current_turn advances.
   useEffect(() => {
@@ -292,7 +360,20 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   >({});
   const pieceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const animationsRef = useRef<Map<string, Animation>>(new Map());
+  /**
+   * Track positions a running hop started and ends at, for the next state. The
+   * animation is part of the record: a cancelled hop's rejection handler runs
+   * one microtask later, after its replacement has registered its own record,
+   * so it must be able to tell that the entry is no longer its own.
+   */
+  const hopMetaRef = useRef<
+    Map<string, { from: number; to: number; animation: Animation }>
+  >(new Map());
   const [animInitialized, setAnimInitialized] = useState(false);
+
+  const [transits, setTransits] = useState<Record<string, Transit>>({});
+  /** Which transit object owns each key, so a superseded flight cannot land. */
+  const startedTransitsRef = useRef<Map<string, Transit>>(new Map());
 
   // Auto-scroll chat to bottom on new messages
   useEffect(() => {
@@ -314,6 +395,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     pos: number;
     visualPos: number;
     coord: GridCoord;
+    /** True while this piece is drawn flying out of its base. */
+    ghost: boolean;
     /** Position inside the stack of pieces sharing a cell. */
     stackIndex: number;
     stackCount: number;
@@ -325,20 +408,35 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     for (let i = 0; i < (pieces_count || 4); i++) {
       const realPos = playerPieces[i] !== undefined ? playerPieces[i] : -1;
       const key = `${player.id}-${i}`;
+      const transit = transits[key];
       const visualPos = visualPositions[key] ?? realPos;
-      const coord = getGridCoordinates(
-        vIdx,
-        visualPos,
-        trackOffsetForSeat(gameState.track_offsets, vIdx),
-      );
+      // A released piece has no board position yet. Draw it at the slot it is
+      // leaving as soon as the new state renders: the hop effect runs after the
+      // first paint, so waiting for it would blink the piece out for a frame.
+      const pendingRelease =
+        !transit && !reducedMotion && realPos >= 0 && visualPos === -1;
+      const ghostStart = transit?.ghost
+        ? transit.from
+        : pendingRelease
+          ? yardSlotCentreForPiece(gameState.track_offsets, playerIdx, i)
+          : null;
+      const ghost = ghostStart !== null;
+      const coord =
+        ghostStart ??
+        getGridCoordinates(
+          vIdx,
+          visualPos,
+          trackOffsetForSeat(gameState.track_offsets, vIdx),
+        );
       allRenderedPieces.push({
         playerIdx,
         vIdx,
         playerId: player.id,
         pieceIdx: i,
         pos: realPos,
-        visualPos,
+        visualPos: ghost ? -1 : visualPos,
         coord,
+        ghost,
         stackIndex: 0,
         stackCount: 1,
       });
@@ -484,38 +582,122 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         if (from === undefined || from === to) continue;
 
         const element = pieceRefs.current.get(key);
-        if (!element || cellPitch <= 0 || from < 0 || to <= from) {
+
+        // A capture and a release leave the cell grid: one flight between the
+        // piece's cell (or nothing, when it is still in the base) and its base
+        // slot. The destination is suppressed until the flight lands.
+        if (
+          (from < 0 || to < 0) &&
+          cellPitch > 0 &&
+          (from < 0 || element) &&
+          !prefersReducedMotion()
+        ) {
+          const seatVIdx = getVisualIdx(seat);
+          const offset = trackOffsetForSeat(gameState.track_offsets, seatVIdx);
+          const base = yardSlotCentreForPiece(gameState.track_offsets, seat, i);
+          const released = from < 0;
+          // If a hop is still running, the flight starts where the piece is
+          // painted rather than at the target the hop was heading to.
+          const hopStart =
+            !released &&
+            element &&
+            animationsRef.current.has(key) &&
+            hopMetaRef.current.has(key)
+              ? paintedPoint(element, cellPitch)
+              : null;
+          // A flight may still be running for this piece: hand the key over.
+          animationsRef.current.get(key)?.cancel();
+          animationsRef.current.delete(key);
+          hopMetaRef.current.delete(key);
+          startedTransitsRef.current.delete(key);
+          setTransits((previous) => ({
+            ...previous,
+            [key]: {
+              key,
+              from:
+                hopStart ??
+                (released ? base : getGridCoordinates(seatVIdx, from, offset)),
+              to: to < 0 ? base : getGridCoordinates(seatVIdx, to, offset),
+              target: to,
+              ghost: released,
+            },
+          }));
+          // The stand-in draws a released piece; the real one appears on
+          // landing. A captured piece keeps its element until the flight ends.
+          if (released) immediate[key] = -1;
+          continue;
+        }
+
+        if (!element || cellPitch <= 0 || to <= from || prefersReducedMotion()) {
           immediate[key] = to;
           continue;
         }
 
-        // A newer state supersedes the hop that is still in flight.
-        animationsRef.current.get(key)?.cancel();
-
         const seatVIdx = getVisualIdx(seat);
-        const points = hopPoints(from, to, (position) =>
+        const coordOf = (position: number) =>
           getGridCoordinates(
             seatVIdx,
             position,
             trackOffsetForSeat(gameState.track_offsets, seatVIdx),
-          ),
-        );
+          );
+
+        // A newer state supersedes the hop that is still in flight. Start the
+        // replacement where the piece is painted, not at the previous target:
+        // otherwise the piece teleports forward and skips the cells it has not
+        // walked yet.
+        const inFlight = animationsRef.current.get(key);
+        const inFlightMeta = hopMetaRef.current.get(key);
+        let startPosition = from;
+        const painted = inFlight ? paintedPoint(element, cellPitch) : null;
+        if (inFlight && inFlightMeta) {
+          const timing = inFlight.effect?.getComputedTiming();
+          const progress =
+            typeof timing?.progress === "number" ? timing.progress : 1;
+          const position =
+            inFlightMeta.from + (inFlightMeta.to - inFlightMeta.from) * progress;
+          startPosition = Math.min(
+            to,
+            Math.max(inFlightMeta.from, Math.ceil(position - 1e-3)),
+          );
+        }
+        inFlight?.cancel();
+        if (animationsRef.current.get(key) === inFlight) {
+          animationsRef.current.delete(key);
+        }
+        if (hopMetaRef.current.get(key) === inFlightMeta) {
+          hopMetaRef.current.delete(key);
+        }
+
+        const cells = hopPoints(startPosition, to, coordOf);
+        const points = painted ? [painted, ...cells] : cells;
         const geometry = { pitch: cellPitch, size: cellPitch * 0.8, overlap: 0 };
         const animation = element.animate(
           points.map((point) => ({ transform: pieceTransform(point, geometry) })),
           { duration: HOP_STEP_MS * (points.length - 1), easing: "linear" },
         );
         animationsRef.current.set(key, animation);
+        hopMetaRef.current.set(key, { from: startPosition, to, animation });
         const finalTransform = pieceTransform(points[points.length - 1], geometry);
         void animation.finished.then(
           () => {
-            animationsRef.current.delete(key);
+            if (animationsRef.current.get(key) === animation) {
+              animationsRef.current.delete(key);
+            }
+            if (hopMetaRef.current.get(key)?.animation === animation) {
+              hopMetaRef.current.delete(key);
+            }
             // Pin the finished position first: a render that lands before the
             // commit must not snap the piece back for a frame.
             element.style.transform = finalTransform;
             setVisualPositions((prev) => ({ ...prev, [key]: to }));
           },
-          () => undefined, // cancelled: the newer state decides the position
+          () => {
+            // Cancelled: the newer state decides the position. Only drop our
+            // own record — the replacement may already have registered.
+            if (hopMetaRef.current.get(key)?.animation === animation) {
+              hopMetaRef.current.delete(key);
+            }
+          },
         );
       }
     });
@@ -532,6 +714,70 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     pieces_count,
     players,
   ]);
+
+  // One straight flight from the board to the base, or the other way round.
+  useLayoutEffect(() => {
+    if (cellPitch <= 0) return;
+    const geometry = { pitch: cellPitch, size: cellPitch * 0.8, overlap: 0 };
+
+    Object.values(transits).forEach((transit) => {
+      if (startedTransitsRef.current.get(transit.key) === transit) return;
+      const element = pieceRefs.current.get(transit.key);
+
+      const settle = (pin: boolean, animation?: Animation) => {
+        // A superseded flight must not touch the key any more: its rejection
+        // handler runs after the replacement has taken over.
+        const ownsAnimation =
+          !animation || animationsRef.current.get(transit.key) === animation;
+        if (animation) {
+          if (startedTransitsRef.current.get(transit.key) === transit) {
+            startedTransitsRef.current.delete(transit.key);
+          }
+          if (ownsAnimation) animationsRef.current.delete(transit.key);
+        }
+        if (!ownsAnimation) return;
+
+        if (pin && element) {
+          element.style.transform = pieceTransform(transit.to, geometry);
+        }
+        // A newer state may already own this piece: only commit our target if
+        // nothing has moved it since the flight started.
+        if (realPositionsRef.current[transit.key] === transit.target) {
+          setVisualPositions((previous) => ({
+            ...previous,
+            [transit.key]: transit.target,
+          }));
+        }
+        setTransits((previous) => {
+          if (previous[transit.key] !== transit) return previous;
+          const next = { ...previous };
+          delete next[transit.key];
+          return next;
+        });
+      };
+
+      if (!element) {
+        // Nothing to draw (the piece unmounted mid-flight): just commit.
+        settle(false);
+        return;
+      }
+
+      const animation = element.animate(
+        [
+          { transform: pieceTransform(transit.from, geometry) },
+          { transform: pieceTransform(transit.to, geometry) },
+        ],
+        { duration: TRANSIT_MS, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
+      );
+      startedTransitsRef.current.set(transit.key, transit);
+      animationsRef.current.set(transit.key, animation);
+
+      void animation.finished.then(
+        () => settle(true, animation),
+        () => settle(false, animation), // cancelled: the newer state decides
+      );
+    });
+  }, [cellPitch, transits]);
 
   // Cancel hops that are still running when the board unmounts.
   useEffect(() => {
@@ -598,10 +844,17 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       >
         <div className="grid grid-cols-2 grid-rows-2 gap-[clamp(3px,0.5vmin,8px)] p-[clamp(4px,0.8vmin,12px)] w-full h-full">
           {Array.from({ length: 4 }).map((_, idx) => {
+            const slotKey =
+              ownerIdx >= 0 && players[ownerIdx]
+                ? `${players[ownerIdx].id}-${idx}`
+                : "";
+            // A captured piece is still flying towards the base: do not draw a
+            // second copy there until it lands.
             const slotTaken =
               ownerIdx >= 0 &&
               players[ownerIdx] &&
-              pieces[players[ownerIdx].id]?.[idx] === -1;
+              pieces[players[ownerIdx].id]?.[idx] === -1 &&
+              !transits[slotKey];
             const isMovablePiece =
               ownerIdx === localPlayerIdx &&
               slotTaken &&
@@ -627,19 +880,20 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                         onMovePiece(idx);
                       }
                     }}
-                    className={`w-[80%] h-[80%] rounded-full bg-white shadow-[0_3px_8px_rgba(0,0,0,0.25)] flex items-center justify-center relative ${
+                    className={`w-[80%] h-[80%] relative ${
                       isMovablePiece
-                        ? "cursor-pointer animate-bounce ring-2 ring-amber-400 ring-offset-1 ring-offset-transparent z-30 scale-105 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white"
+                        ? "cursor-pointer z-30 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white rounded-full"
                         : ""
                     }`}
                   >
-                    <div
-                      className="w-[70%] h-[70%] rounded-full relative overflow-hidden"
-                      style={{ backgroundColor: color }}
-                    >
-                      <div className="absolute inset-0 bg-gradient-to-br from-white/40 via-white/10 to-transparent rounded-full" />
-                    </div>
-                    <div className="absolute top-[8%] left-[15%] w-[30%] h-[20%] rounded-full bg-white/60 blur-[1px] rotate-[-20deg]" />
+                    <PieceDisc
+                      color={color}
+                      className={`w-full h-full ${
+                        isMovablePiece
+                          ? "motion-safe:animate-bounce ring-2 ring-amber-400 ring-offset-1 ring-offset-transparent"
+                          : ""
+                      }`}
+                    />
                   </div>
                 )}
               </div>
@@ -769,6 +1023,10 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           {/* Board */}
           <div
             ref={boardRef}
+            // The board is a coordinate plane, not text: pin it to LTR so the
+            // grid columns and `pieceTransform()` both grow to the right. The
+            // document stays RTL for the copy around the board.
+            dir="ltr"
             className="relative w-[min(88vw,78vh)] aspect-square max-w-[480px] bg-[#FAF4E6] rounded-[clamp(16px,3vmin,28px)] p-[clamp(8px,1.5vmin,16px)] shadow-[0_16px_36px_rgba(0,0,0,0.08),inset_0_2px_6px_rgba(255,255,255,0.6)] border-[clamp(2px,0.4vmin,4px)] border-[#E8D3B0] flex items-center justify-center"
           >
             <div className="relative w-full h-full">
@@ -792,32 +1050,34 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                   );
                 })}
                 {/* Unused corners are dimmed by renderBaseYard itself. */}
-                <div className="absolute inset-0 bg-white/30 rounded-xl pointer-events-none -z-10" />
                 <BoardGrid />
               </div>
 
               {/* ═══ Animated piece overlay ═══ */}
               {cellPitch > 0 &&
-                allRenderedPieces.filter((p) => p.visualPos >= 0).length >
-                  0 && (
+                allRenderedPieces.filter((p) => p.visualPos >= 0 || p.ghost)
+                  .length > 0 && (
                   <div
                     className="absolute inset-0 z-20"
                     style={{ pointerEvents: "none" }}
                   >
                     {allRenderedPieces
-                      .filter((p) => p.visualPos >= 0)
+                      .filter((p) => p.visualPos >= 0 || p.ghost)
                       .map(({
                         vIdx,
                         playerId: pId,
                         pieceIdx,
                         coord,
+                        ghost,
                         stackIndex,
                         stackCount,
                       }) => {
                         const theme = playerColors[colorSeatOf(vIdx)];
                         if (!theme) return null;
                         const isMovable =
-                          pId === localPlayerId && isPieceMovable(pieceIdx);
+                          !ghost &&
+                          pId === localPlayerId &&
+                          isPieceMovable(pieceIdx);
 
                         const pieceSize = cellPitch * 0.8;
                         const overlapOffset = stackOffset(stackIndex, stackCount);
@@ -826,10 +1086,15 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                         return (
                           <div
                             key={`piece-${pId}-${pieceIdx}`}
-                            role="button"
+                            // The stand-in that flies a piece out of its base
+                            // is decoration: it is not a control and carries no
+                            // meaning for a screen reader.
+                            role={ghost ? undefined : "button"}
                             tabIndex={isMovable ? 0 : -1}
-                            aria-disabled={!isMovable}
-                            aria-label={`مهره ${pieceIdx + 1}`}
+                            aria-disabled={ghost ? undefined : !isMovable}
+                            aria-label={ghost ? undefined : `مهره ${pieceIdx + 1}`}
+                            aria-hidden={ghost || undefined}
+                            data-piece={pieceIdx + 1}
                             onKeyDown={(event) => {
                               if (!isMovable) return;
                               if (event.key === "Enter" || event.key === " ") {
@@ -842,6 +1107,11 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                               if (element) pieceRefs.current.set(key, element);
                               else pieceRefs.current.delete(key);
                             }}
+                            // This element owns the placement transform and is
+                            // what the hop animates. Decorations (ring, bounce)
+                            // live on the inner disc: a CSS animation outranks
+                            // an inline style, so putting one here would throw
+                            // the piece back to left/top 0.
                             style={{
                               position: "absolute",
                               left: 0,
@@ -853,23 +1123,22 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                                 size: pieceSize,
                                 overlap: overlapOffset,
                               }),
-                              zIndex: 20 + stackIndex,
-                              pointerEvents: "auto",
+                              zIndex:
+                                (isMovable ? 1000 : ghost ? 900 : 20) +
+                                stackIndex,
+                              pointerEvents: ghost ? "none" : "auto",
                             }}
                             onClick={() => isMovable && onMovePiece(pieceIdx)}
-                            className={`rounded-full bg-white shadow-[0_3px_8px_rgba(0,0,0,0.25)] flex items-center justify-center ${
-                              isMovable
-                                ? "cursor-pointer animate-bounce ring-2 ring-amber-400 ring-offset-2 z-30 scale-105 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white"
-                                : ""
-                            }`}
+                            className="rounded-full focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white"
                           >
-                            <div
-                              className="w-[70%] h-[70%] rounded-full relative overflow-hidden"
-                              style={{ backgroundColor: color }}
-                            >
-                              <div className="absolute inset-0 bg-gradient-to-br from-white/40 via-white/10 to-transparent rounded-full" />
-                            </div>
-                            <div className="absolute top-[8%] left-[15%] w-[30%] h-[20%] rounded-full bg-white/60 blur-[1px] rotate-[-20deg]" />
+                            <PieceDisc
+                              color={color}
+                              className={`w-full h-full ${
+                                isMovable
+                                  ? "cursor-pointer motion-safe:animate-bounce ring-2 ring-amber-400 ring-offset-2"
+                                  : ""
+                              }`}
+                            />
                           </div>
                         );
                       })}
@@ -887,7 +1156,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
             {/* Roll control */}
             <div className="flex justify-center relative">
               {isMyTurn && !gameState.dice_rolled && !isSpinning && (
-                <div className="absolute inset-[-4px] rounded-full bg-amber-400/20 animate-pulse" />
+                <div className="absolute inset-[-4px] rounded-full bg-amber-400/20 motion-safe:animate-pulse" />
               )}
               {isMyTurn ? (
                 <button

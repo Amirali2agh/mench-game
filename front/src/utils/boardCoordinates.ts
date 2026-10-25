@@ -206,6 +206,57 @@ export function getGridCoordinates(
   return YARD_SENTINEL;
 }
 
+/**
+ * Centre of the four-slot base that belongs to `seat`, in cell units.
+ *
+ * The base fills a four-by-four block in one corner, so its centre sits at
+ * 1.5 or 8.5 cells; a fractional point is fine for `pieceTransform()`.
+ */
+export function yardCentreForSeat(
+  trackOffsets: readonly number[] | undefined,
+  seat: number,
+): GridCoord {
+  const corner = cornerForSeat(trackOffsets, seat);
+  return {
+    r: corner.startsWith("t") ? 1.5 : 8.5,
+    c: corner.endsWith("l") ? 1.5 : 8.5,
+  };
+}
+
+/**
+ * Centre of one slot inside a base, in cell units.
+ *
+ * Every base is a two-by-two grid inside a four-cell block, so slot `n` sits
+ * one cell away from the block centre on each axis.
+ */
+export function yardSlotCentreForPiece(
+  trackOffsets: readonly number[] | undefined,
+  seat: number,
+  pieceIndex: number,
+): GridCoord {
+  const centre = yardCentreForSeat(trackOffsets, seat);
+  return {
+    r: centre.r + (pieceIndex < 2 ? -1 : 1),
+    c: centre.c + (pieceIndex % 2 === 0 ? -1 : 1),
+  };
+}
+
+/**
+ * Side of the centre goal that a home column arrives from.
+ *
+ * The board is rendered left-to-right (`dir` on the board container), so a
+ * larger column is further right — the same convention `pieceTransform` uses.
+ * Deriving the side from the column, instead of a fixed `SEAT_SIDES[seat]`
+ * table, keeps the triangle on the right side when a two-player match puts the
+ * second seat on the opposite corner.
+ */
+export function goalSideForHomeColumn(column: readonly GridCoord[]): Side {
+  const [first] = column;
+  if (first.r > goalCoord.r) return "bottom";
+  if (first.r < goalCoord.r) return "top";
+  return first.c > goalCoord.c ? "right" : "left";
+}
+
 export function getArrowRotation(coord: GridCoord): string {
   const { r, c } = coord;
   if (c === 6 && r >= 0 && r <= 3) return "rotate-90";

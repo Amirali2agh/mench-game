@@ -5,6 +5,34 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * The palette `tailwind.config.js` maps its colour names to. These variables
+ * used to live in a `theme.ts` that was deleted, which left every `bg-primary`
+ * / `text-textPrimary` resolving to an undefined `var()` and doing nothing.
+ */
+:root {
+  --text-primary: #2c2c2c;
+  --text-secondary: #5b5750;
+  --text-tertiary: #9c9c9c;
+  --text-invierte: #ffffff;
+
+  --background-primary: #f9f6f0;
+  --background-secondary: #ffffff;
+  --background-tertiary: #f3ede2;
+
+  --primary: #c17d3c;
+  --primary-content: #ffffff;
+  --secondary: #e8d3b0;
+  --secondary-content: #2c2c2c;
+  --button-primary: #c17d3c;
+  --button-secondary: #f3ede2;
+
+  --success: #43aa8b;
+  --error: #f94144;
+  --warning: #f9c74f;
+  --info: #277da1;
+}
+
 /* Dice presentation and continuous face-to-face rotation adapted from takhte-porteghal. */
 .dice-perspective {
   perspective: 600px;

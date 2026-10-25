@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mench board — animation lab</title>
+    <!--
+      Harness page for `npm run test:anim`. It is not part of the app: no route
+      links here, and `vite build` ignores it because only index.html is an
+      entry. The document keeps `dir="rtl"` exactly like index.html, so the
+      board is measured in the same writing direction the players get.
+    -->
+  </head>
+  <body>
+    <div id="lab-root"></div>
+    <script type="module" src="/src/animation-lab/main.tsx"></script>
+  </body>
+</html>
