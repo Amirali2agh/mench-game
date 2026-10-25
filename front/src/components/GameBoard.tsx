@@ -993,7 +993,6 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                   );
                 })}
                 {/* Unused corners are dimmed by renderBaseYard itself. */}
-                <div className="absolute inset-0 bg-white/30 rounded-xl pointer-events-none -z-10" />
                 <BoardGrid />
               </div>
 

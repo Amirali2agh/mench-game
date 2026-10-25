@@ -37,6 +37,23 @@ test("the fade-in animation used by the overlays is defined", () => {
   assert.match(allSource(), /animate-fade-in/);
 });
 
+test("every themed colour has a CSS variable behind it", () => {
+  const config = readFileSync(join(FRONT_ROOT, "tailwind.config.js"), "utf8");
+  const css = readFileSync(join(SOURCE_ROOT, "index.css"), "utf8");
+  const used = [...config.matchAll(/var\((--[a-z-]+)\)/g)].map(
+    (match) => match[1],
+  );
+
+  assert.ok(used.length >= 10, "tailwind.config.js should map the palette");
+  for (const name of used) {
+    assert.match(
+      css,
+      new RegExp(`\\s${name}\\s*:`),
+      `${name} is mapped in tailwind.config.js but never defined in index.css`,
+    );
+  }
+});
+
 test("no undefined Tailwind utilities are used", () => {
   const source = allSource();
 
