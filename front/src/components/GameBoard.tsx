@@ -1075,10 +1075,14 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                         return (
                           <div
                             key={`piece-${pId}-${pieceIdx}`}
-                            role="button"
+                            // The stand-in that flies a piece out of its base
+                            // is decoration: it is not a control and carries no
+                            // meaning for a screen reader.
+                            role={ghost ? undefined : "button"}
                             tabIndex={isMovable ? 0 : -1}
-                            aria-disabled={!isMovable}
-                            aria-label={`مهره ${pieceIdx + 1}`}
+                            aria-disabled={ghost ? undefined : !isMovable}
+                            aria-label={ghost ? undefined : `مهره ${pieceIdx + 1}`}
+                            aria-hidden={ghost || undefined}
                             data-piece={pieceIdx + 1}
                             onKeyDown={(event) => {
                               if (!isMovable) return;
