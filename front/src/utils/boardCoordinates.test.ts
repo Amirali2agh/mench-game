@@ -26,6 +26,8 @@ import {
   goalCoord,
   seatColorIndex,
   trackOffsetForSeat,
+  yardCentreForSeat,
+  yardSlotCentreForPiece,
 } from "./boardCoordinates.ts";
 
 const BACKEND_LAYOUT = new URL(
@@ -127,6 +129,28 @@ test("positions map to the expected cells", () => {
   assert.deepEqual(getGridCoordinates(0, HOME_END, 20), HOME_COLUMNS[0][3]);
   assert.deepEqual(getGridCoordinates(0, -1, 20), YARD_SENTINEL);
   assert.deepEqual(getGridCoordinates(0, HOME_END + 1, 20), goalCoord);
+});
+
+test("a base centre sits in the middle of its corner", () => {
+  assert.deepEqual(yardCentreForSeat(CORNER_OFFSETS, 0), { r: 8.5, c: 1.5 });
+  assert.deepEqual(yardCentreForSeat(CORNER_OFFSETS, 1), { r: 1.5, c: 1.5 });
+  assert.deepEqual(yardCentreForSeat(CORNER_OFFSETS, 2), { r: 1.5, c: 8.5 });
+  assert.deepEqual(yardCentreForSeat(CORNER_OFFSETS, 3), { r: 8.5, c: 8.5 });
+  // A two-player match seats the second player on the opposite corner.
+  assert.deepEqual(yardCentreForSeat([20, 0], 1), { r: 1.5, c: 8.5 });
+});
+
+test("base slots sit one cell apart around the centre", () => {
+  const slots = [0, 1, 2, 3].map((index) =>
+    yardSlotCentreForPiece(CORNER_OFFSETS, 0, index),
+  );
+
+  assert.deepEqual(slots, [
+    { r: 7.5, c: 0.5 },
+    { r: 7.5, c: 2.5 },
+    { r: 9.5, c: 0.5 },
+    { r: 9.5, c: 2.5 },
+  ]);
 });
 
 test("the offsets match the backend seat plan", () => {

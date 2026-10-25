@@ -20,6 +20,7 @@ import {
   getArrowRotation,
   getGridCoordinates,
   goalCoord,
+  yardSlotCentreForPiece,
   GridCoord,
   seatColorIndex,
   trackOffsetForSeat,
@@ -30,9 +31,11 @@ import Dice from "./Dice";
 import TurnTimer from "./TurnTimer";
 import {
   HOP_STEP_MS,
+  TRANSIT_MS,
   hopPoints,
   pieceTransform,
   stackOffset,
+  type GridPoint,
 } from "../utils/pieceMotion";
 import { canMovePiece } from "../utils/movement";
 import type { ChatMessage } from "../hooks/useMenschSocket";
@@ -312,6 +315,21 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   const animationsRef = useRef<Map<string, Animation>>(new Map());
   const [animInitialized, setAnimInitialized] = useState(false);
 
+  /**
+   * Flights between the board and a base (a capture or, later, a release).
+   * They are not walks along the track: the piece leaves the cell grid, so the
+   * destination element is suppressed until the flight lands.
+   */
+  interface Transit {
+    key: string;
+    from: GridPoint;
+    to: GridPoint;
+    /** Board position committed when the flight lands (-1 = back in the base). */
+    target: number;
+  }
+  const [transits, setTransits] = useState<Record<string, Transit>>({});
+  const startedTransitsRef = useRef<Set<string>>(new Set());
+
   // Auto-scroll chat to bottom on new messages
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -502,7 +520,32 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         if (from === undefined || from === to) continue;
 
         const element = pieceRefs.current.get(key);
-        if (!element || cellPitch <= 0 || from < 0 || to <= from) {
+        if (!element || cellPitch <= 0 || from < 0) {
+          immediate[key] = to;
+          continue;
+        }
+
+        // A captured piece flies to the centre of its base instead of walking
+        // off the board, and the base stays empty until it lands.
+        if (to < 0) {
+          const seatVIdx = getVisualIdx(seat);
+          setTransits((previous) => ({
+            ...previous,
+            [key]: {
+              key,
+              from: getGridCoordinates(
+                seatVIdx,
+                from,
+                trackOffsetForSeat(gameState.track_offsets, seatVIdx),
+              ),
+              to: yardSlotCentreForPiece(gameState.track_offsets, seat, i),
+              target: to,
+            },
+          }));
+          continue;
+        }
+
+        if (to <= from) {
           immediate[key] = to;
           continue;
         }
@@ -550,6 +593,53 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     pieces_count,
     players,
   ]);
+
+  // One straight flight from the board to the base, or the other way round.
+  useLayoutEffect(() => {
+    if (cellPitch <= 0) return;
+    const geometry = { pitch: cellPitch, size: cellPitch * 0.8, overlap: 0 };
+
+    Object.values(transits).forEach((transit) => {
+      if (startedTransitsRef.current.has(transit.key)) return;
+      const element = pieceRefs.current.get(transit.key);
+      if (!element) return;
+
+      startedTransitsRef.current.add(transit.key);
+      const animation = element.animate(
+        [
+          { transform: pieceTransform(transit.from, geometry) },
+          { transform: pieceTransform(transit.to, geometry) },
+        ],
+        { duration: TRANSIT_MS, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
+      );
+      animationsRef.current.set(transit.key, animation);
+
+      const land = (pin: boolean) => {
+        startedTransitsRef.current.delete(transit.key);
+        animationsRef.current.delete(transit.key);
+        if (pin) element.style.transform = pieceTransform(transit.to, geometry);
+        // A newer state may already own this piece: only commit our target if
+        // nothing has moved it since the flight started.
+        if (realPositionsRef.current[transit.key] === transit.target) {
+          setVisualPositions((previous) => ({
+            ...previous,
+            [transit.key]: transit.target,
+          }));
+        }
+        setTransits((previous) => {
+          if (!previous[transit.key]) return previous;
+          const next = { ...previous };
+          delete next[transit.key];
+          return next;
+        });
+      };
+
+      void animation.finished.then(
+        () => land(true),
+        () => land(false), // cancelled: the newer state decides the position
+      );
+    });
+  }, [cellPitch, transits]);
 
   // Cancel hops that are still running when the board unmounts.
   useEffect(() => {
@@ -616,10 +706,17 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       >
         <div className="grid grid-cols-2 grid-rows-2 gap-[clamp(3px,0.5vmin,8px)] p-[clamp(4px,0.8vmin,12px)] w-full h-full">
           {Array.from({ length: 4 }).map((_, idx) => {
+            const slotKey =
+              ownerIdx >= 0 && players[ownerIdx]
+                ? `${players[ownerIdx].id}-${idx}`
+                : "";
+            // A captured piece is still flying towards the base: do not draw a
+            // second copy there until it lands.
             const slotTaken =
               ownerIdx >= 0 &&
               players[ownerIdx] &&
-              pieces[players[ownerIdx].id]?.[idx] === -1;
+              pieces[players[ownerIdx].id]?.[idx] === -1 &&
+              !transits[slotKey];
             const isMovablePiece =
               ownerIdx === localPlayerIdx &&
               slotTaken &&

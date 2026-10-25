@@ -23,6 +23,14 @@ export interface CellGeometry {
 /** How long one cell of the hop takes, in milliseconds. */
 export const HOP_STEP_MS = 140;
 
+/**
+ * How long a piece takes to fly between the board and its base, in ms.
+ *
+ * A capture and a release are not a walk along the track, so they do not scale
+ * with the distance: one straight flight of the same length every time.
+ */
+export const TRANSIT_MS = 320;
+
 /** Transform that centres a piece inside `point`. */
 export function pieceTransform(point: GridPoint, geometry: CellGeometry): string {
   const { pitch, size, overlap } = geometry;
