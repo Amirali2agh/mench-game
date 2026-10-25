@@ -788,6 +788,10 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           {/* Board */}
           <div
             ref={boardRef}
+            // The board is a coordinate plane, not text: pin it to LTR so the
+            // grid columns and `pieceTransform()` both grow to the right. The
+            // document stays RTL for the copy around the board.
+            dir="ltr"
             className="relative w-[min(88vw,78vh)] aspect-square max-w-[480px] bg-[#FAF4E6] rounded-[clamp(16px,3vmin,28px)] p-[clamp(8px,1.5vmin,16px)] shadow-[0_16px_36px_rgba(0,0,0,0.08),inset_0_2px_6px_rgba(255,255,255,0.6)] border-[clamp(2px,0.4vmin,4px)] border-[#E8D3B0] flex items-center justify-center"
           >
             <div className="relative w-full h-full">
