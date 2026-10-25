@@ -14,11 +14,11 @@ import { playerColors } from "../utils/colors";
 import {
   HOME_COLUMNS,
   SEAT_CORNERS,
-  SEAT_SIDES,
   START_CELLS,
   cornerForSeat,
   getArrowRotation,
   getGridCoordinates,
+  goalSideForHomeColumn,
   goalCoord,
   yardSlotCentreForPiece,
   GridCoord,
@@ -71,6 +71,15 @@ const YARD_CLASSES: Record<Corner, string> = {
 };
 
 const YARD_CORNERS: Corner[] = ["tl", "tr", "bl", "br"];
+
+/**
+ * Side of the goal each triangle belongs to, in colour-seat order.
+ *
+ * Derived from the home columns rather than from the seat index: a two-player
+ * match can seat any colour on any corner, and the triangle has to follow the
+ * column that actually leads into the goal.
+ */
+const GOAL_SIDES: Side[] = HOME_COLUMNS.map(goalSideForHomeColumn);
 
 /** Track cell -> seat, so a cell can be painted without hard-coded coordinates. */
 const START_CELL_SEATS = new Map<string, number>(
@@ -185,12 +194,12 @@ const BoardGrid = React.memo(function BoardGrid() {
                   className="col-start-6 col-end-7 row-start-6 row-end-7 flex items-center justify-center relative"
                 >
                   <div className="w-full h-full rounded-lg overflow-hidden relative">
-                    {SEAT_SIDES.map((side, seat) => (
+                    {GOAL_SIDES.map((side, colorSeat) => (
                       <div
                         key={`goal-${side}`}
                         style={goalTriangleStyle(
                           side,
-                          `${getColorForVisualIdx(seat)}66`,
+                          `${getColorForVisualIdx(colorSeat)}66`,
                         )}
                       />
                     ))}

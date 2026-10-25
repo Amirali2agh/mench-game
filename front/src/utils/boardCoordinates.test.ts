@@ -24,6 +24,7 @@ import {
   cornerForSeat,
   getGridCoordinates,
   goalCoord,
+  goalSideForHomeColumn,
   seatColorIndex,
   trackOffsetForSeat,
   yardCentreForSeat,
@@ -114,6 +115,15 @@ test("four players sit on four different corners", () => {
 test("cornerForSeat falls back to the fixed plan without offsets", () => {
   assert.equal(cornerForSeat(undefined, 0), "bl");
   assert.equal(cornerForSeat([], 2), "tr");
+});
+
+test("goal sides are derived from the home columns, in colour order", () => {
+  assert.deepEqual(HOME_COLUMNS.map(goalSideForHomeColumn), [
+    "bottom",
+    "left",
+    "top",
+    "right",
+  ]);
 });
 
 test("every seat owns one side of the goal", () => {

@@ -241,6 +241,22 @@ export function yardSlotCentreForPiece(
   };
 }
 
+/**
+ * Side of the centre goal that a home column arrives from.
+ *
+ * The board is rendered left-to-right (`dir` on the board container), so a
+ * larger column is further right — the same convention `pieceTransform` uses.
+ * Deriving the side from the column, instead of a fixed `SEAT_SIDES[seat]`
+ * table, keeps the triangle on the right side when a two-player match puts the
+ * second seat on the opposite corner.
+ */
+export function goalSideForHomeColumn(column: readonly GridCoord[]): Side {
+  const [first] = column;
+  if (first.r > goalCoord.r) return "bottom";
+  if (first.r < goalCoord.r) return "top";
+  return first.c > goalCoord.c ? "right" : "left";
+}
+
 export function getArrowRotation(coord: GridCoord): string {
   const { r, c } = coord;
   if (c === 6 && r >= 0 && r <= 3) return "rotate-90";
