@@ -326,6 +326,11 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     to: GridPoint;
     /** Board position committed when the flight lands (-1 = back in the base). */
     target: number;
+    /**
+     * A released piece has no element on the board yet, so the flight is drawn
+     * by a stand-in that the overlay mounts at the base.
+     */
+    ghost: boolean;
   }
   const [transits, setTransits] = useState<Record<string, Transit>>({});
   const startedTransitsRef = useRef<Set<string>>(new Set());
@@ -350,6 +355,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     pos: number;
     visualPos: number;
     coord: GridCoord;
+    /** True while this piece is drawn flying out of its base. */
+    ghost: boolean;
     /** Position inside the stack of pieces sharing a cell. */
     stackIndex: number;
     stackCount: number;
@@ -361,12 +368,18 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     for (let i = 0; i < (pieces_count || 4); i++) {
       const realPos = playerPieces[i] !== undefined ? playerPieces[i] : -1;
       const key = `${player.id}-${i}`;
-      const visualPos = visualPositions[key] ?? realPos;
-      const coord = getGridCoordinates(
-        vIdx,
-        visualPos,
-        trackOffsetForSeat(gameState.track_offsets, vIdx),
-      );
+      const transit = transits[key];
+      const ghost = transit?.ghost ? transit : null;
+      // A released piece is not on the board yet: the stand-in draws it coming
+      // out of the base, and the real piece takes over when the flight lands.
+      const visualPos = ghost ? -1 : (visualPositions[key] ?? realPos);
+      const coord = ghost
+        ? ghost.from
+        : getGridCoordinates(
+            vIdx,
+            visualPos,
+            trackOffsetForSeat(gameState.track_offsets, vIdx),
+          );
       allRenderedPieces.push({
         playerIdx,
         vIdx,
@@ -375,6 +388,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         pos: realPos,
         visualPos,
         coord,
+        ghost: Boolean(ghost),
         stackIndex: 0,
         stackCount: 1,
       });
@@ -520,32 +534,32 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         if (from === undefined || from === to) continue;
 
         const element = pieceRefs.current.get(key);
-        if (!element || cellPitch <= 0 || from < 0) {
-          immediate[key] = to;
-          continue;
-        }
 
-        // A captured piece flies to the centre of its base instead of walking
-        // off the board, and the base stays empty until it lands.
-        if (to < 0) {
+        // A capture and a release leave the cell grid: one flight between the
+        // piece's cell (or nothing, when it is still in the base) and its base
+        // slot. The destination is suppressed until the flight lands.
+        if ((from < 0 || to < 0) && cellPitch > 0 && (from < 0 || element)) {
           const seatVIdx = getVisualIdx(seat);
+          const offset = trackOffsetForSeat(gameState.track_offsets, seatVIdx);
+          const base = yardSlotCentreForPiece(gameState.track_offsets, seat, i);
+          const released = from < 0;
           setTransits((previous) => ({
             ...previous,
             [key]: {
               key,
-              from: getGridCoordinates(
-                seatVIdx,
-                from,
-                trackOffsetForSeat(gameState.track_offsets, seatVIdx),
-              ),
-              to: yardSlotCentreForPiece(gameState.track_offsets, seat, i),
+              from: released ? base : getGridCoordinates(seatVIdx, from, offset),
+              to: to < 0 ? base : getGridCoordinates(seatVIdx, to, offset),
               target: to,
+              ghost: released,
             },
           }));
+          // The stand-in draws a released piece; the real one appears on
+          // landing. A captured piece keeps its element until the flight ends.
+          if (released) immediate[key] = -1;
           continue;
         }
 
-        if (to <= from) {
+        if (!element || cellPitch <= 0 || to <= from) {
           immediate[key] = to;
           continue;
         }
@@ -602,22 +616,13 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     Object.values(transits).forEach((transit) => {
       if (startedTransitsRef.current.has(transit.key)) return;
       const element = pieceRefs.current.get(transit.key);
-      if (!element) return;
-
-      startedTransitsRef.current.add(transit.key);
-      const animation = element.animate(
-        [
-          { transform: pieceTransform(transit.from, geometry) },
-          { transform: pieceTransform(transit.to, geometry) },
-        ],
-        { duration: TRANSIT_MS, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
-      );
-      animationsRef.current.set(transit.key, animation);
 
       const land = (pin: boolean) => {
         startedTransitsRef.current.delete(transit.key);
         animationsRef.current.delete(transit.key);
-        if (pin) element.style.transform = pieceTransform(transit.to, geometry);
+        if (pin && element) {
+          element.style.transform = pieceTransform(transit.to, geometry);
+        }
         // A newer state may already own this piece: only commit our target if
         // nothing has moved it since the flight started.
         if (realPositionsRef.current[transit.key] === transit.target) {
@@ -633,6 +638,22 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           return next;
         });
       };
+
+      if (!element) {
+        // Nothing to draw (the piece unmounted mid-flight): just commit.
+        land(false);
+        return;
+      }
+
+      startedTransitsRef.current.add(transit.key);
+      const animation = element.animate(
+        [
+          { transform: pieceTransform(transit.from, geometry) },
+          { transform: pieceTransform(transit.to, geometry) },
+        ],
+        { duration: TRANSIT_MS, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
+      );
+      animationsRef.current.set(transit.key, animation);
 
       void animation.finished.then(
         () => land(true),
@@ -918,26 +939,29 @@ export const GameBoard: React.FC<GameBoardProps> = ({
 
               {/* ═══ Animated piece overlay ═══ */}
               {cellPitch > 0 &&
-                allRenderedPieces.filter((p) => p.visualPos >= 0).length >
-                  0 && (
+                allRenderedPieces.filter((p) => p.visualPos >= 0 || p.ghost)
+                  .length > 0 && (
                   <div
                     className="absolute inset-0 z-20"
                     style={{ pointerEvents: "none" }}
                   >
                     {allRenderedPieces
-                      .filter((p) => p.visualPos >= 0)
+                      .filter((p) => p.visualPos >= 0 || p.ghost)
                       .map(({
                         vIdx,
                         playerId: pId,
                         pieceIdx,
                         coord,
+                        ghost,
                         stackIndex,
                         stackCount,
                       }) => {
                         const theme = playerColors[colorSeatOf(vIdx)];
                         if (!theme) return null;
                         const isMovable =
-                          pId === localPlayerId && isPieceMovable(pieceIdx);
+                          !ghost &&
+                          pId === localPlayerId &&
+                          isPieceMovable(pieceIdx);
 
                         const pieceSize = cellPitch * 0.8;
                         const overlapOffset = stackOffset(stackIndex, stackCount);
@@ -979,8 +1003,10 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                                 size: pieceSize,
                                 overlap: overlapOffset,
                               }),
-                              zIndex: (isMovable ? 1000 : 20) + stackIndex,
-                              pointerEvents: "auto",
+                              zIndex:
+                                (isMovable ? 1000 : ghost ? 900 : 20) +
+                                stackIndex,
+                              pointerEvents: ghost ? "none" : "auto",
                             }}
                             onClick={() => isMovable && onMovePiece(pieceIdx)}
                             className="rounded-full focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white"
