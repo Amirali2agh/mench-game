@@ -1,4 +1,5 @@
 import React from 'react';
+import { prefersReducedMotion } from '../utils/motion';
 
 export interface DiceProps {
   value: number | null;
@@ -27,6 +28,9 @@ const pipPositions: Record<number, number[]> = {
 
 const Dice: React.FC<DiceProps> = ({ value, isRolling, rollId, className = '' }) => {
   const target = FACE_ROTATIONS[value && FACE_ROTATIONS[value] ? value : 1];
+  // The spin is decoration: show the rolled face straight away when the player
+  // asked for reduced motion.
+  const spinning = isRolling && !prefersReducedMotion();
 
   const renderPips = (faceValue: number) => (
     <div className="grid h-full w-full grid-cols-3 gap-0.5 p-1 pointer-events-none">
@@ -49,9 +53,9 @@ const Dice: React.FC<DiceProps> = ({ value, isRolling, rollId, className = '' })
           '--dice-target-x': `${target.x}deg`,
           '--dice-target-y': `${target.y}deg`,
           transform: `rotateX(${target.x}deg) rotateY(${target.y}deg)`,
-          animation: isRolling ? 'dice-roll 1.3s cubic-bezier(0.15, 0.85, 0.35, 1.2) forwards' : 'none',
+          animation: spinning ? 'dice-roll 1.3s cubic-bezier(0.15, 0.85, 0.35, 1.2) forwards' : 'none',
           // Promote the cube only while it actually moves.
-          willChange: isRolling ? 'transform' : 'auto',
+          willChange: spinning ? 'transform' : 'auto',
         } as React.CSSProperties}
         data-roll-id={rollId ?? undefined}
       >

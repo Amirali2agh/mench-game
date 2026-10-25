@@ -38,6 +38,7 @@ import {
   type GridPoint,
 } from "../utils/pieceMotion";
 import { canMovePiece } from "../utils/movement";
+import { prefersReducedMotion } from "../utils/motion";
 import type { ChatMessage } from "../hooks/useMenschSocket";
 
 interface GameBoardProps {
@@ -565,7 +566,12 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         // A capture and a release leave the cell grid: one flight between the
         // piece's cell (or nothing, when it is still in the base) and its base
         // slot. The destination is suppressed until the flight lands.
-        if ((from < 0 || to < 0) && cellPitch > 0 && (from < 0 || element)) {
+        if (
+          (from < 0 || to < 0) &&
+          cellPitch > 0 &&
+          (from < 0 || element) &&
+          !prefersReducedMotion()
+        ) {
           const seatVIdx = getVisualIdx(seat);
           const offset = trackOffsetForSeat(gameState.track_offsets, seatVIdx);
           const base = yardSlotCentreForPiece(gameState.track_offsets, seat, i);
@@ -586,7 +592,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           continue;
         }
 
-        if (!element || cellPitch <= 0 || to <= from) {
+        if (!element || cellPitch <= 0 || to <= from || prefersReducedMotion()) {
           immediate[key] = to;
           continue;
         }
@@ -1090,7 +1096,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
             {/* Roll control */}
             <div className="flex justify-center relative">
               {isMyTurn && !gameState.dice_rolled && !isSpinning && (
-                <div className="absolute inset-[-4px] rounded-full bg-amber-400/20 animate-pulse" />
+                <div className="absolute inset-[-4px] rounded-full bg-amber-400/20 motion-safe:animate-pulse" />
               )}
               {isMyTurn ? (
                 <button
