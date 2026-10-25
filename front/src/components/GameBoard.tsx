@@ -596,6 +596,15 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           const offset = trackOffsetForSeat(gameState.track_offsets, seatVIdx);
           const base = yardSlotCentreForPiece(gameState.track_offsets, seat, i);
           const released = from < 0;
+          // If a hop is still running, the flight starts where the piece is
+          // painted rather than at the target the hop was heading to.
+          const hopStart =
+            !released &&
+            element &&
+            animationsRef.current.has(key) &&
+            hopMetaRef.current.has(key)
+              ? paintedPoint(element, cellPitch)
+              : null;
           // A flight may still be running for this piece: hand the key over.
           animationsRef.current.get(key)?.cancel();
           animationsRef.current.delete(key);
@@ -605,7 +614,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({
             ...previous,
             [key]: {
               key,
-              from: released ? base : getGridCoordinates(seatVIdx, from, offset),
+              from:
+                hopStart ??
+                (released ? base : getGridCoordinates(seatVIdx, from, offset)),
               to: to < 0 ? base : getGridCoordinates(seatVIdx, to, offset),
               target: to,
               ghost: released,
