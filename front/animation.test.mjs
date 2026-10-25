@@ -142,9 +142,16 @@ function installProbe() {
     if (!layer || !root) return [];
     const pitch = root.getBoundingClientRect().width / 11;
     const board = layer.getBoundingClientRect();
-    return Array.from(layer.querySelectorAll('div[role="button"]')).map((el) => {
-      const label = el.getAttribute("aria-label") || "";
-      const match = /^مهره (\d+)$/.exec(label);
+    const candidates = Array.from(layer.querySelectorAll("div")).filter(
+      (element) =>
+        element.dataset.piece !== undefined ||
+        element.getAttribute("role") === "button",
+    );
+    return candidates.map((el) => {
+      // `data-piece` is the hook the suite uses; the aria-label keeps older
+      // markup measurable.
+      const label = /^مهره (\d+)$/.exec(el.getAttribute("aria-label") || "");
+      const index = el.dataset.piece ?? (label ? label[1] : null);
       const inline = el.style.transform || "";
       const translate = /translate3d\((-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(inline);
       const computed = getComputedStyle(el);
@@ -163,8 +170,8 @@ function installProbe() {
             typeof CSSAnimation !== "undefined" && animation instanceof CSSAnimation,
         );
       return {
-        /** aria-label index of the piece, 1-based. */
-        idx: match ? Number(match[1]) : -1,
+        /** Piece index, 1-based. */
+        idx: index === null ? -1 : Number(index),
         highlight,
         inlineX: translate ? x : null,
         inlineY: translate ? y : null,

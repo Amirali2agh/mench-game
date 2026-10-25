@@ -129,6 +129,24 @@ function goalTriangleStyle(side: Side, color: string): React.CSSProperties {
   }
 }
 
+/** The glass disc every piece is drawn with (board, base and in-flight). */
+const PieceDisc: React.FC<{ color: string; className?: string }> = ({
+  color,
+  className = "",
+}) => (
+  <div
+    className={`rounded-full bg-white shadow-[0_3px_8px_rgba(0,0,0,0.25)] flex items-center justify-center relative ${className}`}
+  >
+    <div
+      className="w-[70%] h-[70%] rounded-full relative overflow-hidden"
+      style={{ backgroundColor: color }}
+    >
+      <div className="absolute inset-0 bg-gradient-to-br from-white/40 via-white/10 to-transparent rounded-full" />
+    </div>
+    <div className="absolute top-[8%] left-[15%] w-[30%] h-[20%] rounded-full bg-white/60 blur-[1px] rotate-[-20deg]" />
+  </div>
+);
+
 const PlayerAvatar: React.FC<{ name: string; avatar?: string }> = ({
   name,
   avatar,
@@ -627,19 +645,20 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                         onMovePiece(idx);
                       }
                     }}
-                    className={`w-[80%] h-[80%] rounded-full bg-white shadow-[0_3px_8px_rgba(0,0,0,0.25)] flex items-center justify-center relative ${
+                    className={`w-[80%] h-[80%] relative ${
                       isMovablePiece
-                        ? "cursor-pointer animate-bounce ring-2 ring-amber-400 ring-offset-1 ring-offset-transparent z-30 scale-105 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white"
+                        ? "cursor-pointer z-30 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white rounded-full"
                         : ""
                     }`}
                   >
-                    <div
-                      className="w-[70%] h-[70%] rounded-full relative overflow-hidden"
-                      style={{ backgroundColor: color }}
-                    >
-                      <div className="absolute inset-0 bg-gradient-to-br from-white/40 via-white/10 to-transparent rounded-full" />
-                    </div>
-                    <div className="absolute top-[8%] left-[15%] w-[30%] h-[20%] rounded-full bg-white/60 blur-[1px] rotate-[-20deg]" />
+                    <PieceDisc
+                      color={color}
+                      className={`w-full h-full ${
+                        isMovablePiece
+                          ? "motion-safe:animate-bounce ring-2 ring-amber-400 ring-offset-1 ring-offset-transparent"
+                          : ""
+                      }`}
+                    />
                   </div>
                 )}
               </div>
@@ -830,6 +849,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                             tabIndex={isMovable ? 0 : -1}
                             aria-disabled={!isMovable}
                             aria-label={`مهره ${pieceIdx + 1}`}
+                            data-piece={pieceIdx + 1}
                             onKeyDown={(event) => {
                               if (!isMovable) return;
                               if (event.key === "Enter" || event.key === " ") {
@@ -842,6 +862,11 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                               if (element) pieceRefs.current.set(key, element);
                               else pieceRefs.current.delete(key);
                             }}
+                            // This element owns the placement transform and is
+                            // what the hop animates. Decorations (ring, bounce)
+                            // live on the inner disc: a CSS animation outranks
+                            // an inline style, so putting one here would throw
+                            // the piece back to left/top 0.
                             style={{
                               position: "absolute",
                               left: 0,
@@ -853,23 +878,20 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                                 size: pieceSize,
                                 overlap: overlapOffset,
                               }),
-                              zIndex: 20 + stackIndex,
+                              zIndex: (isMovable ? 1000 : 20) + stackIndex,
                               pointerEvents: "auto",
                             }}
                             onClick={() => isMovable && onMovePiece(pieceIdx)}
-                            className={`rounded-full bg-white shadow-[0_3px_8px_rgba(0,0,0,0.25)] flex items-center justify-center ${
-                              isMovable
-                                ? "cursor-pointer animate-bounce ring-2 ring-amber-400 ring-offset-2 z-30 scale-105 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white"
-                                : ""
-                            }`}
+                            className="rounded-full focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white"
                           >
-                            <div
-                              className="w-[70%] h-[70%] rounded-full relative overflow-hidden"
-                              style={{ backgroundColor: color }}
-                            >
-                              <div className="absolute inset-0 bg-gradient-to-br from-white/40 via-white/10 to-transparent rounded-full" />
-                            </div>
-                            <div className="absolute top-[8%] left-[15%] w-[30%] h-[20%] rounded-full bg-white/60 blur-[1px] rotate-[-20deg]" />
+                            <PieceDisc
+                              color={color}
+                              className={`w-full h-full ${
+                                isMovable
+                                  ? "cursor-pointer motion-safe:animate-bounce ring-2 ring-amber-400 ring-offset-2"
+                                  : ""
+                              }`}
+                            />
                           </div>
                         );
                       })}
