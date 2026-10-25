@@ -35,6 +35,18 @@ npm test
 npx vite build
 ```
 
+The board animation has its own suite, because a unit test cannot see what the
+browser paints:
+
+```bash
+cd front
+npm i -D puppeteer && npx puppeteer browsers install chrome-headless-shell   # once
+npm run test:anim
+```
+
+It is not part of `npm test` (CI has no browser yet, see #24). Run it for any
+change to the board geometry, the pieces or their animation.
+
 CI (`.github/workflows/ci.yml`) runs the same commands, one job each, plus a
 secret scan. A red gate is a merge blocker.
 

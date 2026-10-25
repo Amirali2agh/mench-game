@@ -110,6 +110,24 @@ function paintedPoint(element: HTMLElement, pitch: number): GridPoint | null {
   return { r: (parts[5] - pad) / pitch, c: (parts[4] - pad) / pitch };
 }
 
+/**
+ * A flight between the board and a base (a capture, or a piece coming out of
+ * the base). It is not a walk along the track: the piece leaves the cell grid,
+ * so the destination element is suppressed until the flight lands.
+ */
+interface Transit {
+  key: string;
+  from: GridPoint;
+  to: GridPoint;
+  /** Board position committed when the flight lands (-1 = back in the base). */
+  target: number;
+  /**
+   * A released piece has no element on the board yet, so the flight is drawn by
+   * a stand-in that the overlay mounts at the base.
+   */
+  ghost: boolean;
+}
+
 /** Triangle of the center goal that leads into the home column of a seat. */
 function goalTriangleStyle(side: Side, color: string): React.CSSProperties {
   const size = "clamp(8px,1.5vmin,18px)";
@@ -343,23 +361,6 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   const hopMetaRef = useRef<Map<string, { from: number; to: number }>>(new Map());
   const [animInitialized, setAnimInitialized] = useState(false);
 
-  /**
-   * Flights between the board and a base (a capture or, later, a release).
-   * They are not walks along the track: the piece leaves the cell grid, so the
-   * destination element is suppressed until the flight lands.
-   */
-  interface Transit {
-    key: string;
-    from: GridPoint;
-    to: GridPoint;
-    /** Board position committed when the flight lands (-1 = back in the base). */
-    target: number;
-    /**
-     * A released piece has no element on the board yet, so the flight is drawn
-     * by a stand-in that the overlay mounts at the base.
-     */
-    ghost: boolean;
-  }
   const [transits, setTransits] = useState<Record<string, Transit>>({});
   const startedTransitsRef = useRef<Set<string>>(new Set());
 
