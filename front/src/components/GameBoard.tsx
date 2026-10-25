@@ -93,6 +93,22 @@ const HOME_CELL_SEATS = new Map<string, number>(
   ),
 );
 
+/**
+ * Cell coordinates (fractional) that a piece is painted at right now.
+ *
+ * Reading the painted transform instead of the last committed position is what
+ * keeps a hop that is superseded mid-flight from jumping: the new keyframes
+ * start where the piece actually is.
+ */
+function paintedPoint(element: HTMLElement, pitch: number): GridPoint | null {
+  const matrix = /matrix\(([^)]*)\)/.exec(getComputedStyle(element).transform);
+  if (!matrix) return null;
+  const parts = matrix[1].split(",").map(Number);
+  if (parts.length < 6) return null;
+  const pad = (pitch - pitch * 0.8) / 2;
+  return { r: (parts[5] - pad) / pitch, c: (parts[4] - pad) / pitch };
+}
+
 /** Triangle of the center goal that leads into the home column of a seat. */
 function goalTriangleStyle(side: Side, color: string): React.CSSProperties {
   const size = "clamp(8px,1.5vmin,18px)";
@@ -322,6 +338,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   >({});
   const pieceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const animationsRef = useRef<Map<string, Animation>>(new Map());
+  /** Track positions a running hop started and ends at, for the next state. */
+  const hopMetaRef = useRef<Map<string, { from: number; to: number }>>(new Map());
   const [animInitialized, setAnimInitialized] = useState(false);
 
   /**
@@ -573,33 +591,60 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           continue;
         }
 
-        // A newer state supersedes the hop that is still in flight.
-        animationsRef.current.get(key)?.cancel();
-
         const seatVIdx = getVisualIdx(seat);
-        const points = hopPoints(from, to, (position) =>
+        const coordOf = (position: number) =>
           getGridCoordinates(
             seatVIdx,
             position,
             trackOffsetForSeat(gameState.track_offsets, seatVIdx),
-          ),
-        );
+          );
+
+        // A newer state supersedes the hop that is still in flight. Start the
+        // replacement where the piece is painted, not at the previous target:
+        // otherwise the piece teleports forward and skips the cells it has not
+        // walked yet.
+        const inFlight = animationsRef.current.get(key);
+        const inFlightMeta = hopMetaRef.current.get(key);
+        let startPosition = from;
+        const painted = inFlight ? paintedPoint(element, cellPitch) : null;
+        if (inFlight && inFlightMeta) {
+          const timing = inFlight.effect?.getComputedTiming();
+          const progress =
+            typeof timing?.progress === "number" ? timing.progress : 1;
+          const position =
+            inFlightMeta.from + (inFlightMeta.to - inFlightMeta.from) * progress;
+          startPosition = Math.min(
+            to,
+            Math.max(inFlightMeta.from, Math.ceil(position - 1e-3)),
+          );
+        }
+        inFlight?.cancel();
+        animationsRef.current.delete(key);
+        hopMetaRef.current.delete(key);
+
+        const cells = hopPoints(startPosition, to, coordOf);
+        const points = painted ? [painted, ...cells] : cells;
         const geometry = { pitch: cellPitch, size: cellPitch * 0.8, overlap: 0 };
         const animation = element.animate(
           points.map((point) => ({ transform: pieceTransform(point, geometry) })),
           { duration: HOP_STEP_MS * (points.length - 1), easing: "linear" },
         );
         animationsRef.current.set(key, animation);
+        hopMetaRef.current.set(key, { from: startPosition, to });
         const finalTransform = pieceTransform(points[points.length - 1], geometry);
         void animation.finished.then(
           () => {
             animationsRef.current.delete(key);
+            hopMetaRef.current.delete(key);
             // Pin the finished position first: a render that lands before the
             // commit must not snap the piece back for a frame.
             element.style.transform = finalTransform;
             setVisualPositions((prev) => ({ ...prev, [key]: to }));
           },
-          () => undefined, // cancelled: the newer state decides the position
+          () => {
+            // cancelled: the newer state decides the position
+            hopMetaRef.current.delete(key);
+          },
         );
       }
     });
