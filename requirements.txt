@@ -3,6 +3,6 @@
 fastapi==0.148.0
 uvicorn[standard]==0.54.0
 redis==8.1.0
-pydantic-settings==2.16.0
+pydantic-settings==2.16.1
 # Used by app/services/prize_service.py at runtime (Porteghal integration).
 httpx==0.28.1
